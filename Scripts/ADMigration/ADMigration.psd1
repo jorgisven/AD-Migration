@@ -5,10 +5,13 @@
     Author            = 'jorgisven'
     CompanyName       = 'Internal'
     Copyright         = '(c) 2026'
-    Description       = 'Module for SAICPRINT → CRIT.AD migration tasks, including exports, transforms, imports, and logging.'
+    Description       = 'Module for SAICPRINT to CRIT.AD migration tasks, including exports, transforms, imports, and logging.'
 
     FunctionsToExport = @(
     'Write-Log'
+    'Get-ADMigrationConfig'
+    'Initialize-ADMigration'
+    'Invoke-Safely'
     # Add more public functions here as you create them
     )
 

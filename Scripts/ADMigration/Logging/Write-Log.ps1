@@ -7,7 +7,8 @@ function Write-log {
         [string]$Level = 'INFO'
     )
 
-    $LogRoot = "$env:USERPROFILE\OneDrive\Desktop\Migration\Logs"
+    $config = Get-ADMigrationConfig
+    $LogRoot = $config.LogRoot
     if (-not (Test-Path $LogRoot)) {
         New-Item -Path $LogRoot -ItemType Directory -Force | Out-Null
     }
