@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Export GPO XML reports from saicprint.local.
+    Export GPO XML reports from source domain.
 
 .DESCRIPTION
     Generates XML reports for all GPOs, including links, WMI filters, and settings.

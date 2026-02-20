@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Export OU structure from saicprint.local.
+    Export OU structure from source domain.
 
 .DESCRIPTION
     Retrieves the full OU hierarchy and exports it to CSV for mapping and reconstruction.

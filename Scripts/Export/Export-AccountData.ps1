@@ -3,7 +3,7 @@
     Export user and service account attributes.
 
 .DESCRIPTION
-    Used for account reconciliation between saicprint.local and crit.ad.
+    Used for account reconciliation between source and target domains.
 #>
 
 $config = Get-ADMigrationConfig

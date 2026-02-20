@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-    Export WMI filters from saicprint.local.
+    Export WMI filters from source domain.
 
 .DESCRIPTION
-    Captures WMI filter names, queries, and descriptions for recreation in crit.ad.
+    Captures WMI filter names, queries, and descriptions for recreation in target domain.
 #>
 
 $config = Get-ADMigrationConfig

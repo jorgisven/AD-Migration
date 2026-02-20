@@ -5,7 +5,7 @@
     Author            = 'jorgisven'
     CompanyName       = 'Internal'
     Copyright         = '(c) 2026'
-    Description       = 'Module for SAICPRINT to CRIT.AD migration tasks, including exports, transforms, imports, and logging.'
+    Description       = 'Module for source to target AD migration tasks, including exports, transforms, imports, and logging.'
 
     FunctionsToExport = @(
     'Write-Log'

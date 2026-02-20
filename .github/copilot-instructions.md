@@ -1,23 +1,23 @@
 # AD-Migration Codebase Instructions
 
 ## Project Overview
-**SAICPRINT → CRIT.AD Migration**: A PowerShell-based Active Directory migration system that orchestrates a three-phase pipeline: **Export** (legacy domain) → **Transform** (mapping & rewrites) → **Import** (target domain).
+**Source → Target Migration**: A PowerShell-based Active Directory migration system that orchestrates a three-phase pipeline: **Export** (legacy domain) → **Transform** (mapping & rewrites) → **Import** (target domain).
 
 ## Architecture & Critical Workflows
 
 ### Three-Phase Pipeline Architecture
 ```
-01_SAICPRINT_Exports  →  02_Transform  →  03_CRITAD_Imports
+01_Source_Exports  →  02_Transform  →  03_Target_Imports
 (GPO_Backups,OU_Struture, (ACL_Analysis,  (GPO_Restores,
  Security,WMI_Filters)  Mapping,WMI_Rebuild) Link_Rebuild)
 ```
-- **Export Phase**: `Scripts/Export/*.ps1` pull data from source domain (saicprint.local)
+- **Export Phase**: `Scripts/Export/*.ps1` pull data from source domain
 - **Transform Phase**: `Scripts/Transform/*.ps1` normalize/rewrite data for target domain compatibility
-- **Import Phase**: `Scripts/Import/*.ps1` rebuild structure in target domain (crit.ad)
+- **Import Phase**: `Scripts/Import/*.ps1` rebuild structure in target domain
 
 ### Path Strategy: Code vs. Data
-- **GitHub Repo** (this codebase): Can be anywhere, syncs with GitHub (e.g., `C:\Users\jorgi\OneDrive\Documents\GitHub\AD-Migration`)
-- **Sensitive Data** (logs, exports, transforms, imports): Always saved to local Documents folder **without OneDrive**: `C:\Users\<username>\Documents\ADMigration\{Logs,Export,Transform,Import}`
+- **GitHub Repo** (this codebase): Can be cloned anywhere in your filesystem
+- **Sensitive Data** (logs, exports, transforms, imports): Always saved to local Documents folder (outside cloud sync): `%USERPROFILE%\Documents\ADMigration\{Logs,Export,Transform,Import}`
 - **Why separate?**: Sensitive AD data (users, ACLs, GPO configs) stays local; code is version-controlled in GitHub
 
 ## Key Patterns & Conventions
@@ -26,7 +26,7 @@
 ```powershell
 Write-Log -Message "operation completed" -Level INFO
 Write-Log -Message "connection failed" -Level ERROR
-# Logs to: C:\Users\<username>\Documents\ADMigration\Logs\YYYY-MM-DD.log
+# Logs to: %USERPROFILE%\Documents\ADMigration\Logs\YYYY-MM-DD.log
 # Levels: INFO, WARN, ERROR
 ```
 
@@ -45,7 +45,7 @@ Invoke-Safely -ScriptBlock { /* operation */ } -Operation "descriptive name"
 ### Export Script Pattern (all TODO - incomplete)
 ```powershell
 # Template in Scripts/Export/Export-*.ps1
-$ExportPath = ".\01_SAICPRINT_Exports\{GPO_Backups|OU_Structure|...}"
+$ExportPath = ".\01_Source_Exports\{GPO_Backups|OU_Structure|...}"
 # Return CSV/XML to workspace folder, use Get-ADMigrationConfig for paths
 ```
 
@@ -61,20 +61,20 @@ $ExportPath = ".\01_SAICPRINT_Exports\{GPO_Backups|OU_Structure|...}"
 
 ### Running/Testing Scripts
 - Module auto-loads on import: `Import-Module .\Scripts\ADMigration\ADMigration.psd1`
-- All paths resolve via `Get-ADMigrationConfig` to `C:\Users\<username>\Documents\ADMigration`
-- Check logs at `C:\Users\<username>\Documents\ADMigration\Logs\{today}.log`
+- All paths resolve via `Get-ADMigrationConfig` to `%USERPROFILE%\Documents\ADMigration`
+- Check logs at `%USERPROFILE%\Documents\ADMigration\Logs\{today}.log`
 
 ## Dependencies & Integration Points
 
 ### Active Directory Integration
 - Requires **AD Module** (part of RSAT) for `Get-ADUser`, `Get-GPO`, `New-ADOrganizationalUnit`, etc.
-- Source domain: `saicprint.local` (export phase)
-- Target domain: `crit.ad` (import phase)
+- Source domain (export phase)
+- Target domain (import phase)
 - No explicit connection logic yet—assumes domain trusts or agent runs with appropriate permissions
 
 ### WMI Filters & Group Policy
-- GPO backups: XML format in `01_SAICPRINT_Exports/GPO_Backups/`
-- WMI filters: Stored separately in `01_SAICPRINT_Exports/WMI_Filters/` (requires rewrite for new domain)
+- GPO backups: XML format in `01_Source_Exports/GPO_Backups/`
+- WMI filters: Stored separately in `01_Source_Exports/WMI_Filters/` (requires rewrite for new domain)
 - GPO links: Rebuilt by `Import-GPOLinks.ps1` after GPOs imported
 
 ### CSV/Data Flow
@@ -84,7 +84,7 @@ $ExportPath = ".\01_SAICPRINT_Exports\{GPO_Backups|OU_Structure|...}"
 
 ## Important Implementation Notes
 
-- **Path Strategy**: GitHub repo location is flexible; sensitive data always goes to `C:\Users\<username>\Documents\ADMigration` via `Get-ADMigrationConfig`
+- **Path Strategy**: GitHub repo location is flexible; sensitive data always goes to `%USERPROFILE%\Documents\ADMigration` via `Get-ADMigrationConfig`
 - **ACL Analysis**: `Transform-ACLAnalysis.ps1` compares source vs target ACLs (incomplete—add diff logic)
 - **All major scripts are TODO placeholders** — implement export/transform/import logic incrementally
 - **Module Version**: Currently 1.0.0; update PSD1 when adding breaking changes
@@ -92,6 +92,6 @@ $ExportPath = ".\01_SAICPRINT_Exports\{GPO_Backups|OU_Structure|...}"
 ## When Adding/Modifying Code
 - Start with `Get-ADMigrationConfig` to understand path structure
 - Reference `Write-Log` and `Invoke-Safely` for error handling pattern
-- Check `02_Transform/` and `01_SAICPRINT_Exports/` folder structure to understand expected data formats
+- Check `02_Transform/` and `01_Source_Exports/` folder structure to understand expected data formats
 - All public functions must appear in `ADMigration.psd1` FunctionsToExport array
 - Test module loading: `Import-Module .\Scripts\ADMigration\ADMigration.psd1 -Force`
