@@ -7,7 +7,11 @@
     Copyright         = '(c) 2026'
     Description       = 'Module for SAICPRINT → CRIT.AD migration tasks, including exports, transforms, imports, and logging.'
 
-    FunctionsToExport = @('Write-Log')
+    FunctionsToExport = @(
+    'Write-Log'
+    # Add more public functions here as you create them
+    )
+
     CmdletsToExport   = @()
     VariablesToExport = @()
     AliasesToExport   = @()
