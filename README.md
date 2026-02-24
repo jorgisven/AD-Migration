@@ -192,12 +192,32 @@ For example:
 
 ## 🛠 Requirements
 
-- **Windows Server** with Active Directory Administrative Center or RSAT
+- **Windows Server** with Active Directory Administrative Center or RSAT (or a workstation with RSAT enabled)
 - **PowerShell 5.1+** (or PowerShell 7+ for cross-platform compatibility)
 - **GPMC** (Group Policy Management Console) installed
 - **AD Module** (part of RSAT) for `Get-ADUser`, `Get-GPO`, `New-ADOrganizationalUnit`, etc.
 - Network access to both source and target domains (at appropriate phases)
 - Appropriate permissions in source domain (read-only for exports)
+
+> **Tip:** After cloning the repo and opening it in VS Code, run the helper
+> `Initialize-ADMigration` from the module. It will create the required
+> `%USERPROFILE%\Documents\ADMigration` folders and warn if prerequisites
+> such as the ActiveDirectory module or GPMC cmdlets are missing. Installing
+> RSAT on the machine will satisfy these dependencies; on Windows 10/11 you can
+> enable it via **Settings → Apps → Optional features** or by running:
+>
+> ```powershell
+> Add-WindowsCapability -Online -Name "Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0"
+> ```
+>
+> Once RSAT/GPMC are installed you should be able to import the module with:
+>
+> ```powershell
+> Import-Module .\Scripts\ADMigration\ADMigration.psd1 -Force
+> Get-Command -Module ADMigration
+> ```
+>
+> and proceed with exports/transforms/imports as described below.
 - Object Creator permissions in target domain (write for imports)
 
 ---

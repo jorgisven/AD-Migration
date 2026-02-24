@@ -9,4 +9,15 @@
 $config = Get-ADMigrationConfig
 $ExportPath = Join-Path $config.ExportRoot 'OU_Structure'
 
-# TODO: Add export logic
+# ensure export folder exists
+if (-not (Test-Path $ExportPath)) {
+    New-Item -Path $ExportPath -ItemType Directory -Force | Out-Null
+}
+
+Invoke-Safely -Operation 'Export OU structure' -ScriptBlock {
+    Get-ADOrganizationalUnit -Filter * -Properties * |
+        Select-Object DistinguishedName,Name,Description,WhenCreated,WhenChanged,ProtectedFromAccidentalDeletion |
+        Export-Csv -Path (Join-Path $ExportPath 'OUs.csv') -NoTypeInformation -Force
+}
+
+Write-Log -Message 'OU structure exported' -Level INFO

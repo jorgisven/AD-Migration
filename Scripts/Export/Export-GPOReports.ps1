@@ -9,4 +9,19 @@
 $config = Get-ADMigrationConfig
 $ExportPath = Join-Path $config.ExportRoot 'GPO_Reports'
 
-# TODO: Add Get-GPOReport logic
+# ensure export folder exists
+if (-not (Test-Path $ExportPath)) {
+    New-Item -Path $ExportPath -ItemType Directory -Force | Out-Null
+}
+
+Invoke-Safely -Operation 'Export GPO reports' -ScriptBlock {
+    # retrieve all GPOs and write XML report for each
+    $gpos = Get-GPO -All
+    foreach ($gpo in $gpos) {
+        $fileName = ($gpo.DisplayName -replace '[\\/:\*?"<>\|]','_') + '.xml'
+        $reportPath = Join-Path $ExportPath $fileName
+        Get-GPOReport -Guid $gpo.Id -ReportType Xml -Path $reportPath
+    }
+}
+
+Write-Log -Message 'GPO reports exported' -Level INFO
