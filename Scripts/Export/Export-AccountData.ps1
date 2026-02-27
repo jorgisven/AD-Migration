@@ -49,6 +49,7 @@ try {
         $userProps = 'DisplayName', 'GivenName', 'Surname', 'Enabled', 'LastLogonDate', 'PasswordLastSet', 'WhenCreated', 'WhenChanged', 'AccountExpirationDate', 'UserPrincipalName', 'SamAccountName', 'DistinguishedName'
         $Users = Get-ADUser -Filter * -Server $SourceDomain -Properties $userProps | `
             Select-Object @{Name = 'SamAccountName'; Expression = { $_.SamAccountName }},
+                          @{Name = 'SID'; Expression = { $_.SID.Value }},
                           @{Name = 'UserPrincipalName'; Expression = { $_.UserPrincipalName }},
                           @{Name = 'DisplayName'; Expression = { $_.DisplayName }},
                           @{Name = 'GivenName'; Expression = { $_.GivenName }},
@@ -71,6 +72,7 @@ try {
         $ServiceAccounts = Get-ADUser -Filter { (SamAccountName -like 'svc_*') -or (SamAccountName -like '*service*') } `
             -Server $SourceDomain -Properties DisplayName, UserPrincipalName, Enabled, userAccountControl | `
             Select-Object @{Name = 'SamAccountName'; Expression = { $_.SamAccountName }},
+                          @{Name = 'SID'; Expression = { $_.SID.Value }},
                           @{Name = 'UserPrincipalName'; Expression = { $_.UserPrincipalName }},
                           @{Name = 'DisplayName'; Expression = { $_.DisplayName }},
                           @{Name = 'DistinguishedName'; Expression = { $_.DistinguishedName }},
@@ -90,6 +92,7 @@ try {
         $compProps = 'OperatingSystem', 'OperatingSystemVersion', 'Enabled', 'LastLogonDate', 'WhenCreated', 'WhenChanged'
         $Computers = Get-ADComputer -Filter * -Server $SourceDomain -Properties $compProps | `
             Select-Object @{Name = 'ComputerName'; Expression = { $_.Name }},
+                          @{Name = 'SID'; Expression = { $_.SID.Value }},
                           @{Name = 'SamAccountName'; Expression = { $_.SamAccountName }},
                           @{Name = 'DistinguishedName'; Expression = { $_.DistinguishedName }},
                           @{Name = 'OperatingSystem'; Expression = { $_.OperatingSystem }},
@@ -104,6 +107,21 @@ try {
         $Computers | Export-Csv -Path $computerFile -NoTypeInformation -Encoding UTF8
         Write-Log -Message "Exported $($Computers.Count) computer accounts to $computerFile" -Level INFO
         
+        # Export groups
+        Write-Log -Message "Exporting groups from $SourceDomain" -Level INFO
+        $Groups = Get-ADGroup -Filter * -Server $SourceDomain | `
+            Select-Object @{Name = 'Name'; Expression = { $_.Name }},
+                          @{Name = 'SamAccountName'; Expression = { $_.SamAccountName }},
+                          @{Name = 'SID'; Expression = { $_.SID.Value }},
+                          @{Name = 'DistinguishedName'; Expression = { $_.DistinguishedName }},
+                          @{Name = 'GroupCategory'; Expression = { $_.GroupCategory }},
+                          @{Name = 'GroupScope'; Expression = { $_.GroupScope }} | `
+            Sort-Object Name
+            
+        $groupFile = Join-Path $ExportPath "Groups_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        $Groups | Export-Csv -Path $groupFile -NoTypeInformation -Encoding UTF8
+        Write-Log -Message "Exported $($Groups.Count) groups to $groupFile" -Level INFO
+
         # Summary
         $summary = @"
 === Account Export Summary ===
@@ -113,8 +131,9 @@ Exported: $(Get-Date)
 Users: $($Users.Count)
 Service Accounts: $($ServiceAccounts.Count)
 Computers: $($Computers.Count)
+Groups: $($Groups.Count)
 
-Total Objects: $($Users.Count + $ServiceAccounts.Count + $Computers.Count)
+Total Objects: $($Users.Count + $ServiceAccounts.Count + $Computers.Count + $Groups.Count)
 "@
         
         Add-Content -Path (Join-Path $ExportPath 'EXPORT_SUMMARY.txt') -Value $summary
@@ -123,6 +142,7 @@ Total Objects: $($Users.Count + $ServiceAccounts.Count + $Computers.Count)
         Write-Host "  - Users: $($Users.Count)"
         Write-Host "  - Service Accounts: $($ServiceAccounts.Count)"
         Write-Host "  - Computers: $($Computers.Count)"
+        Write-Host "  - Groups: $($Groups.Count)"
         
     } -Operation "Export account data from $SourceDomain"
     

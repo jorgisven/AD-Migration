@@ -18,7 +18,8 @@ $scripts = @(
     "Export-OUs.ps1",
     "Export-GPOReports.ps1",
     "Export-WMIFilters.ps1",
-    "Export-AccountData.ps1"
+    "Export-AccountData.ps1",
+    "Export-ACLs.ps1"
 )
 
 Write-Host "=== Starting Full Export for Domain: $SourceDomain ===" -ForegroundColor Cyan

@@ -26,11 +26,14 @@ if (-not (Get-Command Invoke-Safely -ErrorAction SilentlyContinue)) {
 }
 $config = Get-ADMigrationConfig
 $ExportPath = Join-Path $config.ExportRoot 'GPO_Reports'
+$BackupPath = Join-Path $config.ExportRoot 'GPO_Backups'
 
 # Ensure export directory exists
 if (-not (Test-Path $ExportPath)) {
     New-Item -ItemType Directory -Path $ExportPath -Force | Out-Null
-    Write-Log -Message "Created export directory: $ExportPath" -Level INFO
+}
+if (-not (Test-Path $BackupPath)) {
+    New-Item -ItemType Directory -Path $BackupPath -Force | Out-Null
 }
 
 # Prompt for source domain if not provided
@@ -53,10 +56,19 @@ try {
         $reportCount = 0
         foreach ($GPO in $GPOs) {
             try {
+                $safeName = $GPO.DisplayName -replace '[\\/:"*?<>|]', '_'
+
                 # Generate HTML report
-                $htmlPath = Join-Path $ExportPath "$($GPO.DisplayName)_$(Get-Date -Format 'yyyyMMdd_HHmmss').html"
+                $htmlPath = Join-Path $ExportPath "${safeName}.html"
                 Get-GPOReport -Guid $GPO.Id -ReportType Html -Path $htmlPath -Server $SourceDomain
                 
+                # Generate XML report (Required for Transform phase)
+                $xmlPath = Join-Path $ExportPath "${safeName}.xml"
+                Get-GPOReport -Guid $GPO.Id -ReportType Xml -Path $xmlPath -Server $SourceDomain
+
+                # Perform actual GPO Backup (Required for Import)
+                Backup-GPO -Guid $GPO.Id -Path $BackupPath -Server $SourceDomain | Out-Null
+
                 # Also create a simple CSV entry for quick reference
                 [PSCustomObject]@{
                     GPOName            = $GPO.DisplayName
@@ -65,6 +77,7 @@ try {
                     ModificationTime   = $GPO.ModificationTime
                     Owner              = $GPO.Owner
                     HTMLReport         = (Split-Path $htmlPath -Leaf)
+                    XMLReport          = (Split-Path $xmlPath -Leaf)
                 } | Export-Csv -Path $summaryFile -NoTypeInformation -Append -Encoding UTF8
                 
                 $reportCount++
