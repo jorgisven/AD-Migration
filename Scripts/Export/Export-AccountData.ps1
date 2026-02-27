@@ -13,7 +13,19 @@ param(
 )
 
 # Import module and config
-Import-Module .\Scripts\ADMigration\ADMigration.psd1 -Force
+$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+# build path to the module manifest (go up two levels to repo root, then into Scripts\ADMigration)
+$ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) 'Scripts') 'ADMigration\ADMigration.psd1'
+if (-not (Test-Path $ModulePath)) {
+    throw "ADMigration module manifest missing, cannot continue."
+}
+Import-Module $ModulePath -Force -Verbose
+Write-Log -Message "Loaded ADMigration module from $ModulePath" -Level INFO
+# sanity-check that key helpers are available
+if (-not (Get-Command Invoke-Safely -ErrorAction SilentlyContinue)) {
+    Write-Log -Message "Required function Invoke-Safely not defined after module import" -Level ERROR
+    throw "Invoke-Safely unavailable"
+}
 $config = Get-ADMigrationConfig
 $ExportPath = Join-Path $config.ExportRoot 'Security'
 
@@ -34,7 +46,8 @@ try {
     Invoke-Safely -ScriptBlock {
         # Export user accounts
         Write-Log -Message "Exporting user accounts from $SourceDomain" -Level INFO
-        $Users = Get-ADUser -Filter * -Server $SourceDomain -Properties * | `
+        $userProps = 'DisplayName', 'GivenName', 'Surname', 'Enabled', 'LastLogonDate', 'PasswordLastSet', 'WhenCreated', 'WhenChanged', 'AccountExpirationDate', 'UserPrincipalName', 'SamAccountName', 'DistinguishedName'
+        $Users = Get-ADUser -Filter * -Server $SourceDomain -Properties $userProps | `
             Select-Object @{Name = 'SamAccountName'; Expression = { $_.SamAccountName }},
                           @{Name = 'UserPrincipalName'; Expression = { $_.UserPrincipalName }},
                           @{Name = 'DisplayName'; Expression = { $_.DisplayName }},
@@ -56,14 +69,14 @@ try {
         # Export service accounts (users with specific naming patterns)
         Write-Log -Message "Exporting service accounts from $SourceDomain" -Level INFO
         $ServiceAccounts = Get-ADUser -Filter { (SamAccountName -like 'svc_*') -or (SamAccountName -like '*service*') } `
-            -Server $SourceDomain -Properties * | `
+            -Server $SourceDomain -Properties DisplayName, UserPrincipalName, Enabled, userAccountControl | `
             Select-Object @{Name = 'SamAccountName'; Expression = { $_.SamAccountName }},
                           @{Name = 'UserPrincipalName'; Expression = { $_.UserPrincipalName }},
                           @{Name = 'DisplayName'; Expression = { $_.DisplayName }},
                           @{Name = 'DistinguishedName'; Expression = { $_.DistinguishedName }},
                           @{Name = 'Enabled'; Expression = { $_.Enabled }},
-                          @{Name = 'PasswordNotRequired'; Expression = { $_.PasswordNotRequired }},
-                          @{Name = 'AccountNeverExpires'; Expression = { $_.AccountNeverExpires }} | `
+                          @{Name = 'PasswordNotRequired'; Expression = { ($_.userAccountControl -band 32) -eq 32 }},
+                          @{Name = 'AccountNeverExpires'; Expression = { ($_.userAccountControl -band 65536) -eq 65536 }} | `
             Sort-Object SamAccountName
         
         if ($ServiceAccounts.Count -gt 0) {
@@ -74,7 +87,8 @@ try {
         
         # Export computer accounts
         Write-Log -Message "Exporting computer accounts from $SourceDomain" -Level INFO
-        $Computers = Get-ADComputer -Filter * -Server $SourceDomain -Properties * | `
+        $compProps = 'OperatingSystem', 'OperatingSystemVersion', 'Enabled', 'LastLogonDate', 'WhenCreated', 'WhenChanged'
+        $Computers = Get-ADComputer -Filter * -Server $SourceDomain -Properties $compProps | `
             Select-Object @{Name = 'ComputerName'; Expression = { $_.Name }},
                           @{Name = 'SamAccountName'; Expression = { $_.SamAccountName }},
                           @{Name = 'DistinguishedName'; Expression = { $_.DistinguishedName }},
@@ -105,7 +119,7 @@ Total Objects: $($Users.Count + $ServiceAccounts.Count + $Computers.Count)
         
         Add-Content -Path (Join-Path $ExportPath 'EXPORT_SUMMARY.txt') -Value $summary
         
-        Write-Host "✓ Account data export complete:"
+        Write-Host "Account data export complete:"
         Write-Host "  - Users: $($Users.Count)"
         Write-Host "  - Service Accounts: $($ServiceAccounts.Count)"
         Write-Host "  - Computers: $($Computers.Count)"
@@ -114,5 +128,5 @@ Total Objects: $($Users.Count + $ServiceAccounts.Count + $Computers.Count)
     
 } catch {
     Write-Log -Message "Failed to export account data: $_" -Level ERROR
-    Write-Host "✗ Account data export failed. Check logs for details."
+    Write-Host "Account data export failed. Check logs for details."
 }

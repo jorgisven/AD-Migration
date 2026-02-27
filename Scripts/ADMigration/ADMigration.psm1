@@ -1,11 +1,21 @@
 # Determine module root
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptDir = $PSScriptRoot
 
 # Load Private functions first (dependencies for Logging and Public)
 $PrivatePath = Join-Path $ScriptDir 'Private'
 if (Test-Path $PrivatePath) {
-    Get-ChildItem -Path $PrivatePath -Filter *.ps1 -ErrorAction SilentlyContinue |
-        ForEach-Object { . $_.FullName }
+    $PrivateFiles = Get-ChildItem -Path $PrivatePath -Filter *.ps1
+    
+    if (-not ($PrivateFiles.Name -contains 'Invoke-Safely.ps1')) {
+        Write-Warning "CRITICAL: Invoke-Safely.ps1 is missing from $PrivatePath"
+    }
+
+    foreach ($file in $PrivateFiles) {
+        Write-Verbose "Loading private function: $($file.Name)"
+        . $file.FullName
+    }
+} else {
+    Write-Warning "Private directory not found at $PrivatePath"
 }
 
 # Then load Logging functions

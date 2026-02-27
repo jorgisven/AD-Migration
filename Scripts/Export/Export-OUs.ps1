@@ -13,7 +13,17 @@ param(
 )
 
 # Import module and config
-Import-Module .\Scripts\ADMigration\ADMigration.psd1 -Force
+$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) 'Scripts') 'ADMigration\ADMigration.psd1'
+if (-not (Test-Path $ModulePath)) {
+    throw "ADMigration module manifest missing, cannot continue."
+}
+Import-Module $ModulePath -Force
+Write-Log -Message "Loaded ADMigration module from $ModulePath" -Level INFO
+if (-not (Get-Command Invoke-Safely -ErrorAction SilentlyContinue)) {
+    Write-Log -Message "Required function Invoke-Safely not defined after module import" -Level ERROR
+    throw "Invoke-Safely unavailable"
+}
 $config = Get-ADMigrationConfig
 $ExportPath = Join-Path $config.ExportRoot 'OU_Structure'
 
@@ -48,11 +58,11 @@ try {
         $OUs | Export-Csv -Path $outputFile -NoTypeInformation -Encoding UTF8
         
         Write-Log -Message "Exported $($OUs.Count) OUs to $outputFile" -Level INFO
-        Write-Host "✓ OU export complete: $outputFile"
+        Write-Host "OU export complete: $outputFile"
         
     } -Operation "Export OUs from $SourceDomain"
     
 } catch {
     Write-Log -Message "Failed to export OUs: $_" -Level ERROR
-    Write-Host "✗ OU export failed. Check logs for details."
+    Write-Host "OU export failed. Check logs for details."
 }

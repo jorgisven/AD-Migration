@@ -13,7 +13,17 @@ param(
 )
 
 # Import module and config
-Import-Module .\Scripts\ADMigration\ADMigration.psd1 -Force
+$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) 'Scripts') 'ADMigration\ADMigration.psd1'
+if (-not (Test-Path $ModulePath)) {
+    throw "ADMigration module manifest missing, cannot continue."
+}
+Import-Module $ModulePath -Force
+Write-Log -Message "Loaded ADMigration module from $ModulePath" -Level INFO
+if (-not (Get-Command Invoke-Safely -ErrorAction SilentlyContinue)) {
+    Write-Log -Message "Required function Invoke-Safely not defined after module import" -Level ERROR
+    throw "Invoke-Safely unavailable"
+}
 $config = Get-ADMigrationConfig
 $ExportPath = Join-Path $config.ExportRoot 'GPO_Reports'
 
@@ -37,6 +47,8 @@ try {
         
         Write-Log -Message "Found $($GPOs.Count) GPOs to export" -Level INFO
         
+        $summaryFile = Join-Path $ExportPath "_GPO_Summary_${SourceDomain}_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        
         # Generate reports for each GPO
         $reportCount = 0
         foreach ($GPO in $GPOs) {
@@ -53,7 +65,7 @@ try {
                     ModificationTime   = $GPO.ModificationTime
                     Owner              = $GPO.Owner
                     HTMLReport         = (Split-Path $htmlPath -Leaf)
-                } | Export-Csv -Path (Join-Path $ExportPath '_GPO_Summary.csv') -NoTypeInformation -Append -Encoding UTF8
+                } | Export-Csv -Path $summaryFile -NoTypeInformation -Append -Encoding UTF8
                 
                 $reportCount++
             } catch {
@@ -62,11 +74,11 @@ try {
         }
         
         Write-Log -Message "Exported $reportCount GPO reports to $ExportPath" -Level INFO
-        Write-Host "✓ GPO report export complete: $reportCount reports generated"
+        Write-Host "GPO report export complete: $reportCount reports generated"
         
     } -Operation "Export GPO reports from $SourceDomain"
     
 } catch {
     Write-Log -Message "Failed to export GPO reports: $_" -Level ERROR
-    Write-Host "✗ GPO report export failed. Check logs for details."
+    Write-Host "GPO report export failed. Check logs for details."
 }
