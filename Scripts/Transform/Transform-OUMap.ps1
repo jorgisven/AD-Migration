@@ -1,3 +1,5 @@
+$Form1_Load = {
+}
 <#
 .SYNOPSIS
     Generate OU mapping file from exported source OUs.
