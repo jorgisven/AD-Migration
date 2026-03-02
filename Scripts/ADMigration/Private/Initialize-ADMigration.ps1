@@ -1,16 +1,14 @@
 function Initialize-ADMigration {
-    $config = Get-ADMigrationConfig
+    [CmdletBinding()]
+    param()
 
-    foreach ($path in @(
-        $config.LogRoot,
-        $config.ExportRoot,
-        $config.TransformRoot,
-        $config.ImportRoot
-    )) {
+    $config = Get-ADMigrationConfig
+    # create all configured directories if they don't exist
+    foreach ($path in $config.Values) {
         if (-not (Test-Path $path)) {
-            New-Item -ItemType Directory -Path $path -Force | Out-Null
+            New-Item -Path $path -ItemType Directory -Force | Out-Null
         }
     }
 
-    Write-Log -Message "ADMigration module initialized"
+    Write-Log -Message "ADMigration directories initialized under $($config.Root)" -Level INFO
 }

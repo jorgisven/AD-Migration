@@ -9,9 +9,10 @@ function Invoke-Safely {
 
     try {
         & $ScriptBlock
+        Write-Log -Message "$Operation succeeded" -Level INFO
     }
     catch {
-        Write-Log -Level ERROR -Message "$Operation failed: $($_.Exception.Message)"
+        Write-Log -Message "$Operation failed: $($_.Exception.Message)" -Level ERROR
         throw
     }
 }
