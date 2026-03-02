@@ -53,7 +53,7 @@ try {
         
         if ($WMIFilters.Count -eq 0) {
             Write-Log -Message "No WMI filters found in source domain" -Level WARN
-            Write-Host "⚠ No WMI filters found"
+            Write-Host "[-] No WMI filters found"
         } else {
             # Export to CSV
             $WMIFilterData = @()
@@ -75,10 +75,10 @@ try {
             # Also export the raw WMI query data for transform phase
             $queryFile = Join-Path $ExportPath "WMI_Filters_Queries_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
             foreach ($filter in $WMIFilters) {
-                Add-Content -Path $queryFile -Value "=== $($filter.'msWMI-Name') ==="
+                Add-Content -Path $queryFile -Value "=== $($filter.'msWMI-Name') ===" -Encoding UTF8
                 # Extract WMI queries (they're nested in the object)
-                Add-Content -Path $queryFile -Value ($filter.'msWMI-Parm2' -join "`r`n")
-                Add-Content -Path $queryFile -Value "`n"
+                Add-Content -Path $queryFile -Value ($filter.'msWMI-Parm2' -join "`r`n") -Encoding UTF8
+                Add-Content -Path $queryFile -Value "`n" -Encoding UTF8
             }
             
             Write-Log -Message "Exported $($WMIFilters.Count) WMI filters to $outputFile" -Level INFO

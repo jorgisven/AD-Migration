@@ -201,8 +201,9 @@ $btnRun.Add_Click({
         $lblStatus.Text = "Process complete."
         [System.Windows.Forms.MessageBox]::Show("Process Complete!`n`nExports saved to: $($config.ExportRoot)`nTransforms saved to: $($config.TransformRoot)", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         
-        # Auto-open folder as requested
-        Invoke-Item $config.ExportRoot
+        # Auto-open mapping folder so user can edit the OU Map
+        $mappingPath = Join-Path $config.TransformRoot 'Mapping'
+        if (Test-Path $mappingPath) { Invoke-Item $mappingPath }
 
     } catch {
         $lblStatus.Text = "Error occurred. Check console/logs for details."

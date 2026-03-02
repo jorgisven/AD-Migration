@@ -136,7 +136,7 @@ Groups: $($Groups.Count)
 Total Objects: $($Users.Count + $ServiceAccounts.Count + $Computers.Count + $Groups.Count)
 "@
         
-        Add-Content -Path (Join-Path $ExportPath 'EXPORT_SUMMARY.txt') -Value $summary
+        Add-Content -Path (Join-Path $ExportPath 'EXPORT_SUMMARY.txt') -Value $summary -Encoding UTF8
         
         Write-Host "Account data export complete:"
         Write-Host "  - Users: $($Users.Count)"
