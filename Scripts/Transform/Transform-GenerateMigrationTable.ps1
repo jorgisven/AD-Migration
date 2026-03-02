@@ -55,7 +55,7 @@ Function Add-Mapping {
                 $targetSam = $UserMap[$row.SamAccountName]
             }
 
-            $Mappings += [PSCustomObject]@{
+            $script:Mappings += [PSCustomObject]@{
                 Type        = $Type
                 Source      = "$SourceDomain\$($row.SamAccountName)"
                 Destination = "$TargetDomain\$targetSam"

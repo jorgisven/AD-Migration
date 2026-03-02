@@ -28,7 +28,7 @@ $config = Get-ADMigrationConfig
 # Create Main Form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "AD Migration Assistant"
-$form.Size = New-Object System.Drawing.Size(500, 380)
+$form.Size = New-Object System.Drawing.Size(500, 420)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
@@ -107,6 +107,13 @@ $lblStatus.Text = "Ready"
 $lblStatus.ForeColor = [System.Drawing.Color]::DimGray
 $form.Controls.Add($lblStatus)
 
+# Progress Bar
+$progressBar = New-Object System.Windows.Forms.ProgressBar
+$progressBar.Location = New-Object System.Drawing.Point(20, 335)
+$progressBar.Size = New-Object System.Drawing.Size(440, 23)
+$progressBar.Style = 'Continuous'
+$form.Controls.Add($progressBar)
+
 # Logic
 $btnOpen.Add_Click({
     if (Test-Path $config.ExportRoot) {
@@ -132,44 +139,74 @@ $btnRun.Add_Click({
     }
 
     $btnRun.Enabled = $false
-    $lblStatus.Text = "Running exports... (Check Console)"
+    $progressBar.Value = 0
+    $lblStatus.Text = "Starting process..."
+    $lblStatus.ForeColor = [System.Drawing.Color]::DimGray
     $form.Refresh()
 
     try {
-        # 1. Run Exports
-        $exportScript = Join-Path $ScriptDir "Export\Run-AllExports.ps1"
-        if (Test-Path $exportScript) {
-            & $exportScript -SourceDomain $source
-        } else {
-            throw "Export script missing: $exportScript"
-        }
+        # Define all steps for the progress bar
+        $exportScripts = @(
+            "Export\Export-OUs.ps1",
+            "Export\Export-GPOReports.ps1",
+            "Export\Export-WMIFilters.ps1",
+            "Export\Export-AccountData.ps1",
+            "Export\Export-ACLs.ps1" # From Run-AllExports.ps1
+        )
 
-        $lblStatus.Text = "Running transforms..."
-        $form.Refresh()
+        $transformScripts = @(
+            "Transform\Transform-GenerateMigrationTable.ps1",
+            "Transform\Transform-OUMap.ps1"
+        )
+
+        $allSteps = $exportScripts + $transformScripts
+        $progressBar.Maximum = $allSteps.Count
+        $progressBar.Step = 1
+
+        # 1. Run Exports
+        foreach ($scriptName in $exportScripts) {
+            $lblStatus.Text = "Running: $($scriptName -replace '\\', ' -> ')"
+            $form.Refresh()
+
+            $scriptPath = Join-Path $ScriptDir $scriptName
+            if (Test-Path $scriptPath) {
+                & $scriptPath -SourceDomain $source
+            } else {
+                Write-Log -Message "Skipping missing script: $scriptPath" -Level WARN
+            }
+            $progressBar.PerformStep()
+        }
 
         # 2. Run Transforms
-        # Migration Table
-        $migTableScript = Join-Path $ScriptDir "Transform\Transform-GenerateMigrationTable.ps1"
-        if (Test-Path $migTableScript) {
-            & $migTableScript -SourceDomain $source -TargetDomain $target
+        foreach ($scriptName in $transformScripts) {
+            $lblStatus.Text = "Running: $($scriptName -replace '\\', ' -> ')"
+            $form.Refresh()
+
+            $scriptPath = Join-Path $ScriptDir $scriptName
+            if (Test-Path $scriptPath) {
+                if ($scriptName -eq "Transform\Transform-OUMap.ps1") {
+                    # Convert FQDN to DN (e.g. target.local -> DC=target,DC=local)
+                    $targetDN = "DC=" + ($target -replace '\.', ',DC=')
+                    & $scriptPath -TargetBaseDN $targetDN
+                }
+                elseif ($scriptName -eq "Transform\Transform-GenerateMigrationTable.ps1") {
+                    & $scriptPath -SourceDomain $source -TargetDomain $target
+                }
+            } else {
+                Write-Log -Message "Skipping missing script: $scriptPath" -Level WARN
+            }
+            $progressBar.PerformStep()
         }
 
-        # OU Map
-        # Convert FQDN to DN (e.g. target.local -> DC=target,DC=local)
-        $targetDN = "DC=" + ($target -replace '\.', ',DC=')
-        $ouMapScript = Join-Path $ScriptDir "Transform\Transform-OUMap.ps1"
-        if (Test-Path $ouMapScript) {
-            & $ouMapScript -TargetBaseDN $targetDN
-        }
-
-        $lblStatus.Text = "Completed."
+        $lblStatus.Text = "Process complete."
         [System.Windows.Forms.MessageBox]::Show("Process Complete!`n`nExports saved to: $($config.ExportRoot)`nTransforms saved to: $($config.TransformRoot)", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         
         # Auto-open folder as requested
         Invoke-Item $config.ExportRoot
 
     } catch {
-        $lblStatus.Text = "Error occurred."
+        $lblStatus.Text = "Error occurred. Check console/logs for details."
+        $lblStatus.ForeColor = [System.Drawing.Color]::Red
         [System.Windows.Forms.MessageBox]::Show("Error: $_", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     } finally {
         $btnRun.Enabled = $true
