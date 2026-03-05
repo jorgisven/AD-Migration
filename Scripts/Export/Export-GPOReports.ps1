@@ -12,6 +12,9 @@ param(
     [string]$SourceDomain
 )
 
+# Add GUI support
+Add-Type -AssemblyName System.Windows.Forms
+
 # Import module and config
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) 'Scripts') 'ADMigration\ADMigration.psd1'
@@ -27,6 +30,7 @@ if (-not (Get-Command Invoke-Safely -ErrorAction SilentlyContinue)) {
 $config = Get-ADMigrationConfig
 $ExportPath = Join-Path $config.ExportRoot 'GPO_Reports'
 $BackupPath = Join-Path $config.ExportRoot 'GPO_Backups'
+$OUExportPath = Join-Path $config.ExportRoot 'OU_Structure'
 
 # Ensure export directory exists
 if (-not (Test-Path $ExportPath)) {
@@ -41,6 +45,14 @@ if (-not $SourceDomain) {
     $SourceDomain = Read-Host "Enter source domain name (e.g., source.local)"
 }
 
+# Load Empty OUs list if available
+$EmptyOUs = @()
+$emptyListFile = Join-Path $OUExportPath "EmptyOUs.txt"
+if (Test-Path $emptyListFile) {
+    $EmptyOUs = Get-Content $emptyListFile
+    Write-Log -Message "Loaded $($EmptyOUs.Count) empty OUs for link analysis" -Level INFO
+}
+
 Write-Log -Message "Starting GPO report export from domain: $SourceDomain" -Level INFO
 
 try {
@@ -51,9 +63,10 @@ try {
         Write-Log -Message "Found $($GPOs.Count) GPOs to export" -Level INFO
         
         $summaryFile = Join-Path $ExportPath "_GPO_Summary_${SourceDomain}_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        $ReportSummary = @()
+        $EmptyLinkedGPOs = @()
         
         # Generate reports for each GPO
-        $reportCount = 0
         foreach ($GPO in $GPOs) {
             try {
                 $safeName = $GPO.DisplayName -replace '[\\/:"*?<>|]', '_'
@@ -69,8 +82,24 @@ try {
                 # Perform actual GPO Backup (Required for Import)
                 Backup-GPO -Guid $GPO.Id -Path $BackupPath -Server $SourceDomain | Out-Null
 
+                # Check if GPO is linked ONLY to empty OUs
+                [xml]$xmlData = Get-Content $xmlPath
+                $links = $xmlData.GPO.LinksTo
+                $isLinkedOnlyToEmpty = $false
+                
+                if ($links -and $EmptyOUs.Count -gt 0) {
+                    $allLinksEmpty = $true
+                    foreach ($link in $links) {
+                        if ($link.SOMPath -notin $EmptyOUs) { $allLinksEmpty = $false; break }
+                    }
+                    if ($allLinksEmpty) { 
+                        $isLinkedOnlyToEmpty = $true 
+                        $EmptyLinkedGPOs += $GPO.DisplayName
+                    }
+                }
+
                 # Also create a simple CSV entry for quick reference
-                [PSCustomObject]@{
+                $ReportSummary += [PSCustomObject]@{
                     GPOName            = $GPO.DisplayName
                     GPOID              = $GPO.Id
                     CreationTime       = $GPO.CreationTime
@@ -78,16 +107,37 @@ try {
                     Owner              = $GPO.Owner
                     HTMLReport         = (Split-Path $htmlPath -Leaf)
                     XMLReport          = (Split-Path $xmlPath -Leaf)
-                } | Export-Csv -Path $summaryFile -NoTypeInformation -Append -Encoding UTF8
-                
-                $reportCount++
+                    IsLinkedOnlyToEmpty = $isLinkedOnlyToEmpty
+                }
             } catch {
                 Write-Log -Message "Failed to export report for GPO: $($GPO.DisplayName)" -Level WARN
             }
         }
         
-        Write-Log -Message "Exported $reportCount GPO reports to $ExportPath" -Level INFO
-        Write-Host "GPO report export complete: $reportCount reports generated"
+        # Handle Empty-Linked GPOs
+        if ($EmptyLinkedGPOs.Count -gt 0) {
+            $msg = "Found $($EmptyLinkedGPOs.Count) GPOs that are linked ONLY to empty OUs.`n`nDo you want to EXPORT them or SKIP (delete) them?"
+            $result = [System.Windows.Forms.MessageBox]::Show($msg, "Empty-Linked GPOs Detected", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+            
+            if ($result -eq 'No') {
+                Write-Log -Message "User selected SKIP for empty-linked GPOs. Cleaning up..." -Level INFO
+                # Filter summary
+                $ReportSummary = $ReportSummary | Where-Object { $_.IsLinkedOnlyToEmpty -eq $false }
+                
+                # Delete files for skipped GPOs
+                foreach ($gpoName in $EmptyLinkedGPOs) {
+                    $safeName = $gpoName -replace '[\\/:"*?<>|]', '_'
+                    Remove-Item (Join-Path $ExportPath "${safeName}.html") -ErrorAction SilentlyContinue
+                    Remove-Item (Join-Path $ExportPath "${safeName}.xml") -ErrorAction SilentlyContinue
+                    # Note: We don't delete the Backup folder content easily as it uses GUIDs, but the XML/HTML reports are gone.
+                }
+            }
+        }
+
+        $ReportSummary | Export-Csv -Path $summaryFile -NoTypeInformation -Encoding UTF8
+        
+        Write-Log -Message "Exported $($ReportSummary.Count) GPO reports to $ExportPath" -Level INFO
+        Write-Host "GPO report export complete: $($ReportSummary.Count) reports generated"
         
     } -Operation "Export GPO reports from $SourceDomain"
     

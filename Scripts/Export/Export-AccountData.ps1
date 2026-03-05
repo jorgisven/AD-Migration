@@ -46,7 +46,7 @@ try {
     Invoke-Safely -ScriptBlock {
         # Export user accounts
         Write-Log -Message "Exporting user accounts from $SourceDomain" -Level INFO
-        $userProps = 'DisplayName', 'GivenName', 'Surname', 'Enabled', 'LastLogonDate', 'PasswordLastSet', 'WhenCreated', 'WhenChanged', 'AccountExpirationDate', 'UserPrincipalName', 'SamAccountName', 'DistinguishedName'
+        $userProps = 'DisplayName', 'GivenName', 'Surname', 'Enabled', 'LastLogonDate', 'PasswordLastSet', 'WhenCreated', 'WhenChanged', 'AccountExpirationDate', 'UserPrincipalName', 'SamAccountName', 'DistinguishedName', 'Description'
         $Users = Get-ADUser -Filter * -Server $SourceDomain -Properties $userProps | `
             Select-Object @{Name = 'SamAccountName'; Expression = { $_.SamAccountName }},
                           @{Name = 'SID'; Expression = { $_.SID.Value }},
@@ -54,6 +54,7 @@ try {
                           @{Name = 'DisplayName'; Expression = { $_.DisplayName }},
                           @{Name = 'GivenName'; Expression = { $_.GivenName }},
                           @{Name = 'Surname'; Expression = { $_.Surname }},
+                          @{Name = 'Description'; Expression = { $_.Description }},
                           @{Name = 'DistinguishedName'; Expression = { $_.DistinguishedName }},
                           @{Name = 'Enabled'; Expression = { $_.Enabled }},
                           @{Name = 'LastLogonDate'; Expression = { $_.LastLogonDate }},
@@ -70,11 +71,12 @@ try {
         # Export service accounts (users with specific naming patterns)
         Write-Log -Message "Exporting service accounts from $SourceDomain" -Level INFO
         $ServiceAccounts = Get-ADUser -Filter { (SamAccountName -like 'svc_*') -or (SamAccountName -like '*service*') } `
-            -Server $SourceDomain -Properties DisplayName, UserPrincipalName, Enabled, userAccountControl | `
+            -Server $SourceDomain -Properties DisplayName, UserPrincipalName, Enabled, userAccountControl, Description | `
             Select-Object @{Name = 'SamAccountName'; Expression = { $_.SamAccountName }},
                           @{Name = 'SID'; Expression = { $_.SID.Value }},
                           @{Name = 'UserPrincipalName'; Expression = { $_.UserPrincipalName }},
                           @{Name = 'DisplayName'; Expression = { $_.DisplayName }},
+                          @{Name = 'Description'; Expression = { $_.Description }},
                           @{Name = 'DistinguishedName'; Expression = { $_.DistinguishedName }},
                           @{Name = 'Enabled'; Expression = { $_.Enabled }},
                           @{Name = 'PasswordNotRequired'; Expression = { ($_.userAccountControl -band 32) -eq 32 }},
@@ -89,11 +91,13 @@ try {
         
         # Export computer accounts
         Write-Log -Message "Exporting computer accounts from $SourceDomain" -Level INFO
-        $compProps = 'OperatingSystem', 'OperatingSystemVersion', 'Enabled', 'LastLogonDate', 'WhenCreated', 'WhenChanged'
-        $Computers = Get-ADComputer -Filter * -Server $SourceDomain -Properties $compProps | `
+        $compProps = 'OperatingSystem', 'OperatingSystemVersion', 'Enabled', 'LastLogonDate', 'WhenCreated', 'WhenChanged', 'Description'
+        # Filter out Domain Controllers (PrimaryGroupID 516)
+        $Computers = Get-ADComputer -Filter "PrimaryGroupID -ne 516" -Server $SourceDomain -Properties $compProps | `
             Select-Object @{Name = 'ComputerName'; Expression = { $_.Name }},
                           @{Name = 'SID'; Expression = { $_.SID.Value }},
                           @{Name = 'SamAccountName'; Expression = { $_.SamAccountName }},
+                          @{Name = 'Description'; Expression = { $_.Description }},
                           @{Name = 'DistinguishedName'; Expression = { $_.DistinguishedName }},
                           @{Name = 'OperatingSystem'; Expression = { $_.OperatingSystem }},
                           @{Name = 'OperatingSystemVersion'; Expression = { $_.OperatingSystemVersion }},
@@ -109,10 +113,11 @@ try {
         
         # Export groups
         Write-Log -Message "Exporting groups from $SourceDomain" -Level INFO
-        $Groups = Get-ADGroup -Filter * -Server $SourceDomain | `
+        $Groups = Get-ADGroup -Filter * -Server $SourceDomain -Properties Description | `
             Select-Object @{Name = 'Name'; Expression = { $_.Name }},
                           @{Name = 'SamAccountName'; Expression = { $_.SamAccountName }},
                           @{Name = 'SID'; Expression = { $_.SID.Value }},
+                          @{Name = 'Description'; Expression = { $_.Description }},
                           @{Name = 'DistinguishedName'; Expression = { $_.DistinguishedName }},
                           @{Name = 'GroupCategory'; Expression = { $_.GroupCategory }},
                           @{Name = 'GroupScope'; Expression = { $_.GroupScope }} | `

@@ -25,6 +25,16 @@ $scripts = @(
 
 Write-Host "=== Starting Full Export for Domain: $SourceDomain ===" -ForegroundColor Cyan
 
+# GUI Notice: Domain Controllers are not exported
+Add-Type -AssemblyName System.Windows.Forms
+$dcMsg = "NOTE: Domain Controller computer accounts and replication data are NOT included in this export.`n`nDomain Controllers must be manually built and promoted in the target domain.`n`nClick OK to acknowledge and continue."
+$dcResult = [System.Windows.Forms.MessageBox]::Show($dcMsg, "Migration Notice", [System.Windows.Forms.MessageBoxButtons]::OKCancel, [System.Windows.Forms.MessageBoxIcon]::Information)
+
+if ($dcResult -eq 'Cancel') {
+    Write-Host "Export cancelled by user." -ForegroundColor Yellow
+    exit
+}
+
 foreach ($script in $scripts) {
     $scriptPath = Join-Path $ScriptRoot $script
     
