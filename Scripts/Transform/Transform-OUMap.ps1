@@ -55,11 +55,11 @@ Invoke-Safely -ScriptBlock {
         }
 
         $MappingData += [PSCustomObject]@{
-            SourceDN      = $ou.DistinguishedName
-            SourceOU      = $ou.OU
-            TargetDN      = $targetDN
-            TargetOU      = $ou.OU
             Action        = "Migrate" # Options: Migrate, Merge, Skip, CreateNew
+            SourceOU      = $ou.OU
+            TargetOU      = $ou.OU
+            TargetDN      = $targetDN
+            SourceDN      = $ou.DistinguishedName
             Description   = $ou.Description
         }
     }
