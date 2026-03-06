@@ -13,7 +13,10 @@ param(
     [string]$TargetDomain,
 
     [Parameter(Mandatory = $false)]
-    [string]$MigrationTablePath
+    [string]$MigrationTablePath,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Force
 )
 
 # Import module and config
@@ -64,6 +67,13 @@ Invoke-Safely -ScriptBlock {
         $gpoName = $b.GPODisplayName
         $backupId = $b.ID
         
+        # Check if GPO exists to ensure idempotency
+        $existing = Get-GPO -Name $gpoName -Server $TargetDomain -ErrorAction SilentlyContinue
+        if ($existing -and -not $Force) {
+            Write-Log -Message "GPO '$gpoName' already exists. Skipping (Use -Force to overwrite)." -Level WARN
+            continue
+        }
+
         Write-Log -Message "Importing GPO: '$gpoName' (ID: $backupId)" -Level INFO
         
         $params = @{

@@ -72,7 +72,11 @@ Invoke-Safely -ScriptBlock {
                             Write-Log -Message "Linked '$gpoName' to '$targetSOM'" -Level INFO
                         }
                     } catch {
-                        Write-Log -Message "Failed to link '$gpoName' to '$targetSOM': $_" -Level WARN
+                        if ($_.Exception.Message -match "already linked") {
+                            Write-Log -Message "Link for '$gpoName' at '$targetSOM' already exists." -Level INFO
+                        } else {
+                            Write-Log -Message "Failed to link '$gpoName' to '$targetSOM': $_" -Level WARN
+                        }
                     }
                 } else {
                     Write-Log -Message "Skipping link for '$gpoName': Source path '$sourceSOM' not found in OU Map" -Level WARN
