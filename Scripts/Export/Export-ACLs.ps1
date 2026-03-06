@@ -1,9 +1,10 @@
 <#
 .SYNOPSIS
-    Export ACLs from OUs for analysis.
+    Export Access Control Lists (ACLs) for OUs.
 
 .DESCRIPTION
-    Retrieves security descriptors for all OUs to analyze permissions and delegation.
+    Retrieves security descriptors for all Organizational Units in the source domain.
+    Exports the Discretionary Access Control List (DACL) to CSV for analysis.
 #>
 
 param(
@@ -14,7 +15,7 @@ param(
 # Import module and config
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) 'Scripts') 'ADMigration\ADMigration.psd1'
-if (-not (Test-Path $ModulePath)) { throw "ADMigration module manifest missing." }
+if (-not (Test-Path $ModulePath)) { throw "Module manifest missing." }
 Import-Module $ModulePath -Force
 Write-Log -Message "Loaded ADMigration module from $ModulePath" -Level INFO
 if (-not (Get-Command Invoke-Safely -ErrorAction SilentlyContinue)) { throw "Invoke-Safely unavailable" }
@@ -25,47 +26,56 @@ $ExportPath = Join-Path $config.ExportRoot 'Security'
 # Ensure export directory exists
 if (-not (Test-Path $ExportPath)) { New-Item -ItemType Directory -Path $ExportPath -Force | Out-Null }
 
-if (-not $SourceDomain) { $SourceDomain = Read-Host "Enter source domain name" }
-
-Write-Log -Message "Starting ACL export from domain: $SourceDomain" -Level INFO
-
-try {
-    Invoke-Safely -ScriptBlock {
-        # Get all OUs
-        $OUs = Get-ADOrganizationalUnit -Filter * -Server $SourceDomain
-        Write-Log -Message "Found $($OUs.Count) OUs to scan for ACLs" -Level INFO
-        
-        $ACLData = @()
-
-        foreach ($ou in $OUs) {
-            try {
-                # Get-Acl needs the AD: drive path
-                $acl = Get-Acl -Path "AD:\$($ou.DistinguishedName)"
-                
-                foreach ($access in $acl.Access) {
-                    $ACLData += [PSCustomObject]@{
-                        DistinguishedName     = $ou.DistinguishedName
-                        IdentityReference     = $access.IdentityReference.ToString()
-                        AccessControlType     = $access.AccessControlType.ToString()
-                        ActiveDirectoryRights = $access.ActiveDirectoryRights.ToString()
-                        IsInherited           = $access.IsInherited
-                        InheritanceFlags      = $access.InheritanceFlags.ToString()
-                        PropagationFlags      = $access.PropagationFlags.ToString()
-                    }
-                }
-            } catch {
-                Write-Log -Message "Failed to get ACL for $($ou.DistinguishedName): $_" -Level WARN
-            }
-        }
-        
-        $outputFile = Join-Path $ExportPath "ACLs_OUs_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
-        $ACLData | Export-Csv -Path $outputFile -NoTypeInformation -Encoding UTF8
-        
-        Write-Log -Message "Exported $($ACLData.Count) ACEs to $outputFile" -Level INFO
-        Write-Host "ACL export complete: $outputFile"
-        
-    } -Operation "Export ACLs from $SourceDomain"
-    
-} catch {
-    Write-Log -Message "Failed to export ACLs: $_" -Level ERROR
+if (-not $SourceDomain) {
+    $SourceDomain = (Get-ADDomain).DNSRoot
+    Write-Log -Message "Source domain not specified, using current: $SourceDomain" -Level INFO
 }
+
+$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$csvPath = Join-Path $ExportPath "ACLs_OUs_$timestamp.csv"
+
+Write-Log -Message "Starting ACL Export for $SourceDomain..." -Level INFO
+
+Invoke-Safely -ScriptBlock {
+    # Ensure AD Drive is mounted for Get-Acl
+    if (-not (Get-PSDrive -Name AD -ErrorAction SilentlyContinue)) {
+        New-PSDrive -Name AD -PSProvider ActiveDirectory -Root "" -Server $SourceDomain | Out-Null
+    }
+
+    $OUs = Get-ADOrganizationalUnit -Filter * -Server $SourceDomain
+    Write-Log -Message "Found $($OUs.Count) OUs to scan." -Level INFO
+
+    $ACLData = @()
+    $count = 0
+    $total = $OUs.Count
+
+    foreach ($ou in $OUs) {
+        $count++
+        if ($count % 10 -eq 0) { Write-Progress -Activity "Exporting ACLs" -Status "Processing OU $count of $total" -PercentComplete (($count / $total) * 100) }
+
+        try {
+            # Get-Acl requires the AD drive path
+            $acl = Get-Acl -Path "AD:\$($ou.DistinguishedName)" -ErrorAction Stop
+            
+            foreach ($access in $acl.Access) {
+                $ACLData += [PSCustomObject]@{
+                    DistinguishedName     = $ou.DistinguishedName
+                    IdentityReference     = $access.IdentityReference.ToString()
+                    ActiveDirectoryRights = $access.ActiveDirectoryRights.ToString()
+                    AccessControlType     = $access.AccessControlType.ToString()
+                    IsInherited           = $access.IsInherited
+                    InheritanceFlags      = $access.InheritanceFlags.ToString()
+                    PropagationFlags      = $access.PropagationFlags.ToString()
+                }
+            }
+        } catch {
+            Write-Log -Message "Failed to get ACL for $($ou.DistinguishedName): $_" -Level WARN
+        }
+    }
+
+    $ACLData | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+    Write-Log -Message "Exported $($ACLData.Count) ACEs to $csvPath" -Level INFO
+
+} -Operation "Export OU ACLs"
+
+Write-Host "✅ ACL Export Complete: $csvPath" -ForegroundColor Green

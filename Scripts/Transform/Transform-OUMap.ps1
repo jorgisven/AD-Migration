@@ -64,6 +64,9 @@ Invoke-Safely -ScriptBlock {
         }
     }
 
+    # Sort by length of TargetDN to ensure parents are created before children
+    $MappingData = $MappingData | Sort-Object { $_.TargetDN.Length }
+
     $mapFile = Join-Path $MapPath "OU_Map_Draft.csv"
     $MappingData | Export-Csv -Path $mapFile -NoTypeInformation -Encoding UTF8
 

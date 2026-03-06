@@ -7,8 +7,8 @@ A PowerShell-based Active Directory migration framework for orchestrating clean,
 This repository contains scripts, documentation, and mapping artifacts to execute a three-phase Active Directory migration pipeline:
 
 ```
-01_Source_Exports  →  02_Transform  →  03_Target_Imports
-(Extract Legacy)      (Map & Rewrite)    (Rebuild Target)
+Export (Source)  →  Transform (Workstation)  →  Import (Target)
+(Extract Legacy)      (Map & Rewrite)          (Rebuild Target)
 ```
 
 The goal is to rebuild the OU hierarchy, GPOs, WMI filters, and account structure cleanly—without establishing a trust—while preserving functionality and improving security boundaries.
@@ -18,42 +18,37 @@ The goal is to rebuild the OU hierarchy, GPOs, WMI filters, and account structur
 ```
 AD-Migration/
 |
-|-- 01_Source_Exports/         # Exports from the source domain
-|   |-- OU_Structure/           # OU hierarchy and attributes
-|   |-- GPO_Backups/            # GPO backups (non-sensitive, .gitignore applied)
-|   |-- GPO_Reports/            # GPO XML reports with links, filters, settings
-|   |-- WMI_Filters/            # WMI filter definitions
-|   `-- Security/               # ACL and security information
-|
-|-- 02_Transform/              # Mapping, rewrite, and normalization work
-|   |-- Mapping/                # OU and account mapping artifacts
-|   |-- GPO_Rewrites/           # Domain-specific GPO settings
-|   |-- WMI_Rebuild/            # Rewritten WMI filters for target domain
-|   `-- ACL_Analysis/           # ACL comparison and conversion
-|
-|-- 03_Target_Imports/         # Artifacts used to rebuild structure in target domain
-|   |-- GPO_Restores/           # Prepared GPO restore packages
-|   |-- WMI_Filters/            # Final WMI filter definitions
-|   `-- Link_Rebuild/           # GPO link rebuild scripts and data
-|
 |-- Scripts/                    # PowerShell module + migration scripts
 |   |-- Export/                 # Export phase scripts
 |   |   |-- Export-OUs.ps1
 |   |   |-- Export-GPOReports.ps1
 |   |   |-- Export-WMIFilters.ps1
-|   |   `-- Export-AccountData.ps1
+|   |   |-- Export-AccountData.ps1
+|   |   |-- Export-ACLs.ps1
+|   |   |-- Export-DNS.ps1
+|   |   |-- Export-MigrationPackage.ps1
+|   |   `-- Run-AllExports.ps1
 |   |
 |   |-- Transform/              # Transform phase scripts
 |   |   |-- Transform-OUMap.ps1
+|   |   |-- Transform-OUMap.designer.ps1
+|   |   |-- Transform-AccountMapping.ps1
+|   |   |-- Transform-GenerateMigrationTable.ps1
 |   |   |-- Transform-GPOSettings.ps1
 |   |   |-- Transform-WMIFilters.ps1
-|   |   `-- Transform-ACLAnalysis.ps1
+|   |   |-- Transform-ACLAnalysis.ps1
+|   |   |-- Transform-DNS.ps1
+|   |   |-- Validation-Exports.ps1
+|   |   |-- Validation-OUMap.ps1
+|   |   |-- Validation-AccountPlacement.ps1
+|   |   `-- Validation-GPOApplication.ps1
 |   |
 |   |-- Import/                 # Import phase scripts
 |   |   |-- Import-OUs.ps1
 |   |   |-- Import-GPOs.ps1
 |   |   |-- Import-WMIFilters.ps1
-|   |   `-- Import-GPOLinks.ps1
+|   |   |-- Import-GPOLinks.ps1
+|   |   `-- Import-DNS.ps1
 |   |
 |   `-- ADMigration/            # PowerShell module (core utilities)
 |       |-- ADMigration.psd1    # Module manifest
@@ -93,7 +88,7 @@ Extract all necessary information from the source domain:
 - ACL and security information
 - User and service account attributes for reconciliation
 
-**Output:** CSV/XML files in `01_Source_Exports/`
+**Output:** CSV/XML files in `%USERPROFILE%\Documents\ADMigration\Export\`
 
 ### **2. Normalize & Map to Target Domain**
 Analyze source data and prepare transformation rules:
@@ -104,7 +99,7 @@ Analyze source data and prepare transformation rules:
 - Naming and attribute standardization
 - Domain-specific path and reference rewriting
 
-**Output:** Mapping artifacts and rewrite rules in `02_Transform/`
+**Output:** Mapping artifacts and rewrite rules in `%USERPROFILE%\Documents\ADMigration\Transform\`
 
 ### **3. Rebuild Target Domain Structure**
 Pre-create the target domain hierarchy:
@@ -114,7 +109,7 @@ Pre-create the target domain hierarchy:
 - Pre-stage computer accounts
 - Create service accounts
 
-**Execution:** Runs `Scripts/Import/Import-OUs.ps1`
+**Execution:** Runs `Scripts/Import/Import-OUs.ps1` (Reads from `Transform\Mapping`)
 
 ### **4. Import & Reconstruct GPOs**
 Migrate and validate Group Policy objects:
@@ -124,7 +119,7 @@ Migrate and validate Group Policy objects:
 - Validate security filtering (if applicable)
 - Document GPO dependencies and inheritance models
 
-**Execution:** Runs `Scripts/Import/Import-GPOs.ps1` and `Scripts/Import/Import-WMIFilters.ps1`
+**Execution:** Runs `Scripts/Import/Import-GPOs.ps1` (Reads from `Export\GPO_Reports` & `Transform`)
 
 ### **5. Rebuild GPO Links**
 Establish policies in the target domain:
@@ -134,7 +129,7 @@ Establish policies in the target domain:
 - Validate policy application (gpupdate, gpresult)
 - Compare policy results vs. source domain
 
-**Execution:** Runs `Scripts/Import/Import-GPOLinks.ps1`
+**Execution:** Runs `Scripts/Import/Import-GPOLinks.ps1` (Reads from `Export\GPO_Reports` & `Transform\Mapping`)
 
 ### **6. Validate Post-Migration**
 Comprehensive testing to ensure functionality:
@@ -240,17 +235,8 @@ This creates the local data directory at `%USERPROFILE%\Documents\ADMigration\` 
 
 ### 3. Run Export Phase
 ```powershell
-# Export OU structure
-.\Scripts\Export\Export-OUs.ps1
-
-# Export GPO reports
-.\Scripts\Export\Export-GPOReports.ps1
-
-# Export WMI filters
-.\Scripts\Export\Export-WMIFilters.ps1
-
-# Export account data
-.\Scripts\Export\Export-AccountData.ps1
+# Run the orchestration script to export all data
+.\Scripts\Export\Run-AllExports.ps1 -SourceDomain "source.local"
 ```
 
 ### 4. Review & Process Transforms
