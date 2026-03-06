@@ -16,6 +16,7 @@ The project follows a strict **Export -> Transform -> Import** pipeline to migra
 - `Scripts\Transform\`: Scripts for Phase 2.
 - `Scripts\Import\`: Scripts for Phase 3.
 - `Scripts\Validation\`: Scripts for Phase 4 (Verification).
+- `Scripts\Rollback\`: Scripts for cleanup and reversal.
 - `Docs\`: Documentation.
 
 ## 2. Coding Standards & Patterns
