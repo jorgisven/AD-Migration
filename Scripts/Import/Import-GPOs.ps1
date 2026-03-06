@@ -1,14 +1,19 @@
 <#
 .SYNOPSIS
-    Restore GPOs into target domain.
+    Import Group Policy Objects (GPOs) from backups into the target domain.
 
 .DESCRIPTION
-    Restores GPO backups, applies rewrites, and validates settings.
+    Reads GPO backups from the Export directory and imports them into the current (Target) domain.
+    Supports using a Migration Table to map security principals and UNC paths.
 #>
 
+[CmdletBinding(SupportsShouldProcess=$true)]
 param(
     [Parameter(Mandatory = $false)]
-    [string]$TargetDomain
+    [string]$TargetDomain,
+
+    [Parameter(Mandatory = $false)]
+    [string]$MigrationTablePath
 )
 
 # Import module and config
@@ -19,57 +24,70 @@ Import-Module $ModulePath -Force
 Write-Log -Message "Loaded ADMigration module from $ModulePath" -Level INFO
 if (-not (Get-Command Invoke-Safely -ErrorAction SilentlyContinue)) { throw "Invoke-Safely unavailable" }
 
+# Check for GroupPolicy module
+if (-not (Get-Module -Name GroupPolicy -ListAvailable)) {
+    throw "GroupPolicy module (GPMC) is required but not installed."
+}
+
 $config = Get-ADMigrationConfig
 $BackupPath = Join-Path $config.ExportRoot 'GPO_Backups'
-$MigTablePath = Join-Path $config.TransformRoot 'GPO_MigrationTable.migtable'
+
+# Default migration table path if not provided
+if (-not $MigrationTablePath) {
+    # Look for a .migtable file in the Transform/Mapping folder
+    $MapPath = Join-Path $config.TransformRoot 'Mapping'
+    $foundTable = Get-ChildItem -Path $MapPath -Filter "*.migtable" | Select-Object -First 1
+    if ($foundTable) {
+        $MigrationTablePath = $foundTable.FullName
+        Write-Log -Message "Auto-detected migration table: $MigrationTablePath" -Level INFO
+    }
+}
 
 if (-not (Test-Path $BackupPath)) {
-    Write-Log -Message "No GPO backups found at $BackupPath. Run Export-GPOReports.ps1 first." -Level ERROR
-    throw "GPO Backups missing"
+    Write-Log -Message "GPO Backup directory not found at $BackupPath. Ensure Export-GPOs (or manual backup) was run." -Level ERROR
+    throw "Missing GPO Backups"
 }
 
-if (-not $TargetDomain) {
-    $TargetDomain = (Get-ADDomain).DNSRoot
-}
+if (-not $TargetDomain) { $TargetDomain = (Get-ADDomain).DNSRoot }
 
 Write-Log -Message "Starting GPO Import to $TargetDomain..." -Level INFO
 
-if (Test-Path $MigTablePath) {
-    Write-Log -Message "Using Migration Table: $MigTablePath" -Level INFO
-}
-
 Invoke-Safely -ScriptBlock {
-    # Get all backups from the folder
-    # Import-GPO requires the backup directory, not individual files
-    $Backups = Get-GPO -Path $BackupPath -All
+    # Get list of backups from the manifest
+    $manifestPath = Join-Path $BackupPath "manifest.xml"
+    if (-not (Test-Path $manifestPath)) { throw "Backup manifest.xml not found in $BackupPath" }
     
-    Write-Log -Message "Found $($Backups.Count) GPO backups to import" -Level INFO
-
-    foreach ($backup in $Backups) {
-        $gpoName = $backup.DisplayName
+    [xml]$manifest = Get-Content $manifestPath
+    $backups = $manifest.Backups.BackupInst
+    
+    foreach ($b in $backups) {
+        $gpoName = $b.GPODisplayName
+        $backupId = $b.ID
+        
+        Write-Log -Message "Importing GPO: '$gpoName' (ID: $backupId)" -Level INFO
+        
+        $params = @{
+            BackupId       = $backupId
+            Path           = $BackupPath
+            TargetName     = $gpoName
+            Domain         = $TargetDomain
+            CreateIfNeeded = $true
+            ErrorAction    = 'Stop'
+        }
+        
+        if ($MigrationTablePath -and (Test-Path $MigrationTablePath)) {
+            $params.MigrationTable = $MigrationTablePath
+        } elseif ($MigrationTablePath) {
+            Write-Log -Message "Migration table specified but not found: $MigrationTablePath" -Level WARN
+        }
         
         try {
-            # Check if GPO exists to avoid errors or decide on overwrite strategy
-            # Here we use CreateIfNeeded which imports settings into a new or existing GPO
-            $params = @{
-                BackupId       = $backup.Id
-                Path           = $BackupPath
-                TargetName     = $gpoName
-                CreateIfNeeded = $true
-                Domain         = $TargetDomain
-                ErrorAction    = 'Stop'
+            if ($PSCmdlet.ShouldProcess($gpoName, "Import GPO")) {
+                Import-GPO @params | Out-Null
+                Write-Log -Message "Successfully imported '$gpoName'" -Level INFO
             }
-
-            if (Test-Path $MigTablePath) {
-                $params['MigrationTable'] = $MigTablePath
-            }
-
-            Import-GPO @params | Out-Null
-            
-            Write-Log -Message "Imported GPO: $gpoName" -Level INFO
         } catch {
-            Write-Log -Message "Failed to import GPO '$gpoName': $_" -Level ERROR
+            Write-Log -Message "Failed to import '$gpoName': $_" -Level ERROR
         }
     }
-    
-} -Operation "Import GPOs to $TargetDomain"
+} -Operation "Import GPOs"

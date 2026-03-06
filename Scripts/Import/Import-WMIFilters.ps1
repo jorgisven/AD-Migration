@@ -6,6 +6,7 @@
     Imports normalized WMI filter definitions and links them to GPOs.
 #>
 
+[CmdletBinding(SupportsShouldProcess=$true)]
 param(
     [Parameter(Mandatory = $false)]
     [string]$TargetDomain
@@ -69,8 +70,10 @@ Invoke-Safely -ScriptBlock {
                     'msWMI-IntFormatDecimal' = 2 # Standard version
                 }
             }
-            New-ADObject @params -Server $TargetDomain
-            Write-Log -Message "Created WMI Filter: $name" -Level INFO
+            if ($PSCmdlet.ShouldProcess($name, "Create WMI Filter")) {
+                New-ADObject @params -Server $TargetDomain
+                Write-Log -Message "Created WMI Filter: $name" -Level INFO
+            }
         }
     }
 } -Operation "Import WMI Filters"

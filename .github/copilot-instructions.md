@@ -1,97 +1,85 @@
-# AD-Migration Codebase Instructions
+# AD-Migration Copilot Instructions
 
-## Project Overview
-**Source → Target Migration**: A PowerShell-based Active Directory migration system that orchestrates a three-phase pipeline: **Export** (legacy domain) → **Transform** (mapping & rewrites) → **Import** (target domain).
+You are an expert PowerShell developer assisting with an Active Directory Migration project.
+The project follows a strict **Export -> Transform -> Import** pipeline to migrate from a Source Domain to a Target Domain without a trust relationship.
 
-## Architecture & Critical Workflows
+## 1. Project Architecture
 
-### Three-Phase Pipeline Architecture
-```
-01_Source_Exports  →  02_Transform  →  03_Target_Imports
-(GPO_Backups,OU_Struture, (ACL_Analysis,  (GPO_Restores,
- Security,WMI_Filters)  Mapping,WMI_Rebuild) Link_Rebuild)
-```
-- **Export Phase**: `Scripts/Export/*.ps1` pull data from source domain
-- **Transform Phase**: `Scripts/Transform/*.ps1` normalize/rewrite data for target domain compatibility
-- **Import Phase**: `Scripts/Import/*.ps1` rebuild structure in target domain
+### Phases
+1.  **Export**: Read-only extraction from Source AD. Saves to `%USERPROFILE%\Documents\ADMigration\Export`.
+2.  **Transform**: Offline manipulation of exported data (mapping OUs, rewriting GPOs). Saves to `%USERPROFILE%\Documents\ADMigration\Transform`.
+3.  **Import**: Creation of objects in Target AD using Transformed data. Reads from `Transform` folder.
 
-### Path Strategy: Code vs. Data
-- **GitHub Repo** (this codebase): Can be cloned anywhere in your filesystem
-- **Sensitive Data** (logs, exports, transforms, imports): Always saved to local Documents folder (outside cloud sync): `%USERPROFILE%\Documents\ADMigration\{Logs,Export,Transform,Import}`
-- **Why separate?**: Sensitive AD data (users, ACLs, GPO configs) stays local; code is version-controlled in GitHub
+### Directory Structure
+- `Scripts\ADMigration\`: The core module (`ADMigration.psd1`, `psm1`).
+- `Scripts\Export\`: Scripts for Phase 1.
+- `Scripts\Transform\`: Scripts for Phase 2.
+- `Scripts\Import\`: Scripts for Phase 3.
+- `Docs\`: Documentation.
 
-## Key Patterns & Conventions
+## 2. Coding Standards & Patterns
 
-### Logging Pattern (Required for all scripts)
+### Module Loading (Boilerplate)
+All scripts must begin by dynamically locating and importing the `ADMigration` module. Do not hardcode paths.
+
 ```powershell
-Write-Log -Message "operation completed" -Level INFO
-Write-Log -Message "connection failed" -Level ERROR
-# Logs to: %USERPROFILE%\Documents\ADMigration\Logs\YYYY-MM-DD.log
-# Levels: INFO, WARN, ERROR
+# Import module and config
+$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) 'Scripts') 'ADMigration\ADMigration.psd1'
+if (-not (Test-Path $ModulePath)) { throw "Module manifest missing." }
+Import-Module $ModulePath -Force
 ```
 
-### Error Handling Pattern
+### Configuration & Paths
+Never assume the location of data files. Use `Get-ADMigrationConfig`.
+
 ```powershell
-Invoke-Safely -ScriptBlock { /* operation */ } -Operation "descriptive name"
-# Wraps with try-catch, logs errors, re-throws
+$config = Get-ADMigrationConfig
+$ExportPath = $config.ExportRoot
+$TransformPath = $config.TransformRoot
+# Example: $MapPath = Join-Path $config.TransformRoot 'Mapping'
 ```
 
-### File Organization Rules
-- **Public Functions**: `Scripts/ADMigration/Public/*.ps1` - exported via PSD1
-- **Private Helpers**: `Scripts/ADMigration/Private/*.ps1` - internal utilities only
-- **Phase Scripts**: Follow naming: `{Export|Transform|Import}-{Domain|GPO|OU|WMIFilters|ACL}.ps1`
-- Each script has `.SYNOPSIS` and `.DESCRIPTION` blocks at top
+### Logging
+Use `Write-Log` for all status updates.
+- Levels: `INFO`, `WARN`, `ERROR`, `DEBUG`.
+- Logs are automatically written to `%USERPROFILE%\Documents\ADMigration\Logs\`.
 
-### Export Script Pattern (all TODO - incomplete)
 ```powershell
-# Template in Scripts/Export/Export-*.ps1
-$ExportPath = ".\01_Source_Exports\{GPO_Backups|OU_Structure|...}"
-# Return CSV/XML to workspace folder, use Get-ADMigrationConfig for paths
+Write-Log -Message "Starting operation..." -Level INFO
 ```
 
-## Critical Developer Workflows
+### Error Handling & Safety
+Wrap critical AD operations in `Invoke-Safely`.
 
-### Adding a New Migration Function
-1. Create in appropriate phase folder: `Scripts/{ADMigration|Export|Transform|Import}/`
-2. If helper function → place in `Scripts/ADMigration/Private/`
-3. Add `Write-Log` calls for progress tracking
-4. Wrap AD operations in `Invoke-Safely -Operation "description"`
-5. Export from `ADMigration.psd1` if public-facing
-6. Use `Get-ADMigrationConfig` to reference base paths (don't hardcode paths)
+```powershell
+Invoke-Safely -ScriptBlock {
+    # AD Operations here
+    New-ADOrganizationalUnit ...
+} -Operation "Create OUs"
+```
 
-### Running/Testing Scripts
-- Module auto-loads on import: `Import-Module .\Scripts\ADMigration\ADMigration.psd1`
-- All paths resolve via `Get-ADMigrationConfig` to `%USERPROFILE%\Documents\ADMigration`
-- Check logs at `%USERPROFILE%\Documents\ADMigration\Logs\{today}.log`
+### Input/Output
+- **CSV**: Use `Import-Csv` and `Export-Csv -NoTypeInformation -Encoding UTF8`.
+- **Validation**: Check if input files exist before processing. Throw clear errors if missing.
 
-## Dependencies & Integration Points
+## 3. Specific Implementation Details
 
-### Active Directory Integration
-- Requires **AD Module** (part of RSAT) for `Get-ADUser`, `Get-GPO`, `New-ADOrganizationalUnit`, etc.
-- Source domain (export phase)
-- Target domain (import phase)
-- No explicit connection logic yet—assumes domain trusts or agent runs with appropriate permissions
+### OU Mapping
+- OUs are mapped via CSV generated in Transform phase.
+- Target DNs are constructed in `Transform-OUMap.ps1`.
+- Import scripts must respect the `Action` column (Migrate, Skip, Merge).
 
-### WMI Filters & Group Policy
-- GPO backups: XML format in `01_Source_Exports/GPO_Backups/`
-- WMI filters: Stored separately in `01_Source_Exports/WMI_Filters/` (requires rewrite for new domain)
-- GPO links: Rebuilt by `Import-GPOLinks.ps1` after GPOs imported
+### GPO Migration
+- GPOs are backed up using `Backup-GPO`.
+- Reports (XML) are used for analysis.
+- Import involves `Import-GPO` (from backup) or `New-GPO` depending on strategy.
+- Links are reconstructed separately after GPOs exist.
 
-### CSV/Data Flow
-- Export outputs → CSV files in phase folders
-- Transform processes CSVs + rewrites → prepared CSVs in phase 2
-- Import reads prepared CSVs → creates AD objects
+### WMI Filters
+- WMI Filters are complex because they use GUIDs.
+- We map them by Name.
+- Queries must be sanitized (replace Source Domain references with Target Domain).
 
-## Important Implementation Notes
-
-- **Path Strategy**: GitHub repo location is flexible; sensitive data always goes to `%USERPROFILE%\Documents\ADMigration` via `Get-ADMigrationConfig`
-- **ACL Analysis**: `Transform-ACLAnalysis.ps1` compares source vs target ACLs (incomplete—add diff logic)
-- **All major scripts are TODO placeholders** — implement export/transform/import logic incrementally
-- **Module Version**: Currently 1.0.0; update PSD1 when adding breaking changes
-
-## When Adding/Modifying Code
-- Start with `Get-ADMigrationConfig` to understand path structure
-- Reference `Write-Log` and `Invoke-Safely` for error handling pattern
-- Check `02_Transform/` and `01_Source_Exports/` folder structure to understand expected data formats
-- All public functions must appear in `ADMigration.psd1` FunctionsToExport array
-- Test module loading: `Import-Module .\Scripts\ADMigration\ADMigration.psd1 -Force`
+## 4. User Interaction
+- If a critical decision is needed (e.g., skipping empty GPOs), use `System.Windows.Forms.MessageBox` or `Read-Host` if appropriate, but prefer automated defaults with logging.

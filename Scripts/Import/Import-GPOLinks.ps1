@@ -6,6 +6,7 @@
     Uses XML report data to recreate link locations and link order in target domain.
 #>
 
+[CmdletBinding(SupportsShouldProcess=$true)]
 param(
     [Parameter(Mandatory = $false)]
     [string]$TargetDomain
@@ -66,8 +67,10 @@ Invoke-Safely -ScriptBlock {
                         # Note: Get-GPO doesn't easily show links, usually we just try to add it
                         # New-GPLink throws if GPO doesn't exist, but we assume Import-GPOs ran
                         
-                        New-GPLink -Name $gpoName -Target $targetSOM -LinkEnabled ($link.Enabled -eq 'true') -Enforced ($link.NoOverride -eq 'true') -Server $TargetDomain -ErrorAction Stop | Out-Null
-                        Write-Log -Message "Linked '$gpoName' to '$targetSOM'" -Level INFO
+                        if ($PSCmdlet.ShouldProcess($targetSOM, "Link GPO '$gpoName'")) {
+                            New-GPLink -Name $gpoName -Target $targetSOM -LinkEnabled ($link.Enabled -eq 'true') -Enforced ($link.NoOverride -eq 'true') -Server $TargetDomain -ErrorAction Stop | Out-Null
+                            Write-Log -Message "Linked '$gpoName' to '$targetSOM'" -Level INFO
+                        }
                     } catch {
                         Write-Log -Message "Failed to link '$gpoName' to '$targetSOM': $_" -Level WARN
                     }
@@ -81,9 +84,11 @@ Invoke-Safely -ScriptBlock {
         $wmiFilter = $xml.GPO.FilterData.Name
         if ($wmiFilter) {
             try {
-                $gpo = Get-GPO -Name $gpoName -Server $TargetDomain
-                $gpo.WmiFilter = $wmiFilter # This property sets the link
-                Write-Log -Message "Linked WMI Filter '$wmiFilter' to '$gpoName'" -Level INFO
+                if ($PSCmdlet.ShouldProcess($gpoName, "Link WMI Filter '$wmiFilter'")) {
+                    $gpo = Get-GPO -Name $gpoName -Server $TargetDomain
+                    $gpo.WmiFilter = $wmiFilter # This property sets the link
+                    Write-Log -Message "Linked WMI Filter '$wmiFilter' to '$gpoName'" -Level INFO
+                }
             } catch {
                 Write-Log -Message "Failed to link WMI Filter '$wmiFilter' to '$gpoName'" -Level WARN
             }
@@ -106,8 +111,10 @@ Invoke-Safely -ScriptBlock {
 
                     try {
                         Write-Log -Message "Applying GpoApply security filter for '$trusteeName' on GPO '$gpoName'" -Level INFO
-                        Set-GPPermission -Name $gpoName -PermissionLevel GpoApply -TargetName $trusteeName -TargetType $trusteeType -Server $TargetDomain -ErrorAction Stop
-                        $customFiltersApplied = $true
+                        if ($PSCmdlet.ShouldProcess($gpoName, "Set GPPermission '$trusteeName'")) {
+                            Set-GPPermission -Name $gpoName -PermissionLevel GpoApply -TargetName $trusteeName -TargetType $trusteeType -Server $TargetDomain -ErrorAction Stop
+                            $customFiltersApplied = $true
+                        }
                     }
                     catch {
                         Write-Log -Message "Failed to set GpoApply for '$trusteeName' on GPO '$gpoName'. Principal may not exist in target domain. Details: $_" -Level WARN
@@ -120,7 +127,9 @@ Invoke-Safely -ScriptBlock {
             if ($customFiltersApplied) {
                 try {
                     Write-Log -Message "Custom filters applied. Removing default 'Authenticated Users' GpoApply permission from '$gpoName'." -Level INFO
-                    Set-GPPermission -Name $gpoName -PermissionLevel None -TargetName 'Authenticated Users' -TargetType Group -Server $TargetDomain -ErrorAction Stop
+                    if ($PSCmdlet.ShouldProcess($gpoName, "Remove 'Authenticated Users'")) {
+                        Set-GPPermission -Name $gpoName -PermissionLevel None -TargetName 'Authenticated Users' -TargetType Group -Server $TargetDomain -ErrorAction Stop
+                    }
                 } catch {
                     # This might fail if it was already removed or never existed, which is fine.
                     Write-Log -Message "Could not remove GpoApply from 'Authenticated Users' on GPO '$gpoName'. It may have already been removed. Details: $_" -Level WARN

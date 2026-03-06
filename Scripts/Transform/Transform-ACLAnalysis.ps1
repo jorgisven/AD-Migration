@@ -52,7 +52,7 @@ if (-not $aclFiles) {
 $ACLs = Import-Csv $aclFiles[0].FullName
 Write-Log -Message "Analyzing $($ACLs.Count) ACEs from $($aclFiles[0].Name)" -Level INFO
 
-$AnalysisResults = @()
+$AnalysisResults = [System.Collections.Generic.List[PSObject]]::new()
 
 foreach ($ace in $ACLs) {
     $identity = $ace.IdentityReference
@@ -89,7 +89,7 @@ foreach ($ace in $ACLs) {
 
     # Filter out boring default permissions (optional)
     if ($status -ne "OK" -or $ace.IsInherited -eq $false) {
-        $AnalysisResults += [PSCustomObject]@{
+        $AnalysisResults.Add([PSCustomObject]@{
             OU                    = $ace.DistinguishedName
             OriginalIdentity      = $identity
             ResolvedIdentity      = $resolvedName
@@ -98,7 +98,7 @@ foreach ($ace in $ACLs) {
             IsInherited           = $ace.IsInherited
             Status                = $status
             Notes                 = $notes.Trim("; ")
-        }
+        })
     }
 }
 

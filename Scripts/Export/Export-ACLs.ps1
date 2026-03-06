@@ -45,7 +45,7 @@ Invoke-Safely -ScriptBlock {
     $OUs = Get-ADOrganizationalUnit -Filter * -Server $SourceDomain
     Write-Log -Message "Found $($OUs.Count) OUs to scan." -Level INFO
 
-    $ACLData = @()
+    $ACLData = [System.Collections.Generic.List[PSObject]]::new()
     $count = 0
     $total = $OUs.Count
 
@@ -58,15 +58,15 @@ Invoke-Safely -ScriptBlock {
             $acl = Get-Acl -Path "AD:\$($ou.DistinguishedName)" -ErrorAction Stop
             
             foreach ($access in $acl.Access) {
-                $ACLData += [PSCustomObject]@{
+                $ACLData.Add([PSCustomObject]@{
                     DistinguishedName     = $ou.DistinguishedName
-                    IdentityReference     = $access.IdentityReference.ToString()
+                    IdentityReference     = "$($access.IdentityReference)"
                     ActiveDirectoryRights = $access.ActiveDirectoryRights.ToString()
                     AccessControlType     = $access.AccessControlType.ToString()
                     IsInherited           = $access.IsInherited
                     InheritanceFlags      = $access.InheritanceFlags.ToString()
                     PropagationFlags      = $access.PropagationFlags.ToString()
-                }
+                })
             }
         } catch {
             Write-Log -Message "Failed to get ACL for $($ou.DistinguishedName): $_" -Level WARN

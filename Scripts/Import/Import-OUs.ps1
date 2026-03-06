@@ -7,6 +7,7 @@
     Reads from the transformed mapping CSV to ensure correct hierarchy.
 #>
 
+[CmdletBinding(SupportsShouldProcess=$true)]
 param(
     [Parameter(Mandatory = $false)]
     [string]$TargetDomain
@@ -52,8 +53,10 @@ Invoke-Safely -ScriptBlock {
             
             try {
                 # Try to create the OU
-                New-ADOrganizationalUnit -Name $name -Path $parentPath -Description $row.Description -Server $TargetDomain -ProtectedFromAccidentalDeletion $true -ErrorAction Stop
-                Write-Log -Message "Created OU: $targetDN" -Level INFO
+                if ($PSCmdlet.ShouldProcess($targetDN, "Create OU")) {
+                    New-ADOrganizationalUnit -Name $name -Path $parentPath -Description $row.Description -Server $TargetDomain -ProtectedFromAccidentalDeletion $true -ErrorAction Stop
+                    Write-Log -Message "Created OU: $targetDN" -Level INFO
+                }
             } catch [Microsoft.ActiveDirectory.Management.ADIdentityAlreadyExistsException] {
                 Write-Log -Message "OU already exists: $targetDN" -Level INFO
             } catch {

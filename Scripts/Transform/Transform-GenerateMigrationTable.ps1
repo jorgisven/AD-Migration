@@ -1,19 +1,12 @@
 <#
 .SYNOPSIS
-    Generate a GPO Migration Table for mapping security principals.
+    Generate a GPO Migration Table for mapping security principals and paths.
 
 .DESCRIPTION
-    Reads exported Users and Groups and creates a .migtable file.
-    Used by Import-GPOs to map Source\User to Target\User dynamically.
+    Scans exported GPO reports (XML) for references to the source domain (users, groups, UNC paths).
+    Creates a CSV mapping file. This file can be reviewed and then converted into a 
+    standard .migtable file for use with Import-GPO.
 #>
-
-param(
-    [Parameter(Mandatory = $true)]
-    [string]$SourceDomain, # NetBIOS or FQDN
-
-    [Parameter(Mandatory = $true)]
-    [string]$TargetDomain  # NetBIOS or FQDN
-)
 
 # Import module and config
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -23,91 +16,90 @@ Import-Module $ModulePath -Force
 Write-Log -Message "Loaded ADMigration module from $ModulePath" -Level INFO
 
 $config = Get-ADMigrationConfig
-$SourceSecurityPath = Join-Path $config.ExportRoot 'Security'
-$TransformPath = $config.TransformRoot
+$GPOReportPath = Join-Path $config.ExportRoot 'GPO_Reports'
+$TransformPath = Join-Path $config.TransformRoot 'Mapping'
 
 # Ensure transform directory exists
 if (-not (Test-Path $TransformPath)) { New-Item -ItemType Directory -Path $TransformPath -Force | Out-Null }
 
-# Check for optional UserMap.csv for custom username mappings
-# Format: SourceSam,TargetSam
-$UserMapPath = Join-Path $TransformPath 'UserMap.csv'
-$UserMap = @{}
-if (Test-Path $UserMapPath) {
-    Import-Csv $UserMapPath | ForEach-Object {
-        if ($_.SourceSam -and $_.TargetSam) { $UserMap[$_.SourceSam] = $_.TargetSam }
-    }
-    Write-Log -Message "Loaded $($UserMap.Count) custom user mappings from $UserMapPath" -Level INFO
+Write-Log -Message "Starting Migration Table generation..." -Level INFO
+
+if (-not (Test-Path $GPOReportPath)) {
+    Write-Log -Message "GPO Reports folder not found at $GPOReportPath. Run Export-GPOReports.ps1 first." -Level ERROR
+    throw "Missing GPO Reports"
 }
 
-Write-Log -Message "Generating Migration Table mapping $SourceDomain -> $TargetDomain" -Level INFO
+$xmlFiles = Get-ChildItem -Path $GPOReportPath -Filter "*.xml"
+if ($xmlFiles.Count -eq 0) {
+    Write-Log -Message "No XML reports found in $GPOReportPath." -Level WARN
+    return
+}
 
-$Mappings = @()
+Write-Log -Message "Scanning $($xmlFiles.Count) GPO reports..." -Level INFO
 
-Function Add-Mapping {
-    param($Pattern, $Type)
-    $files = Get-ChildItem -Path $SourceSecurityPath -Filter $Pattern | Sort-Object LastWriteTime -Descending
-    if ($files) {
-        $data = Import-Csv $files[0].FullName
-        foreach ($row in $data) {
-            $targetSam = $row.SamAccountName
-            if ($UserMap.ContainsKey($row.SamAccountName)) {
-                $targetSam = $UserMap[$row.SamAccountName]
-            }
+$Principals = @()
+$UNCPaths = @()
 
-            $script:Mappings += [PSCustomObject]@{
-                Type        = $Type
-                Source      = "$SourceDomain\$($row.SamAccountName)"
-                Destination = "$TargetDomain\$targetSam"
+foreach ($file in $xmlFiles) {
+    try {
+        # Load XML
+        [xml]$xml = Get-Content $file.FullName -ErrorAction Stop
+
+        # 1. Extract Trustees (Security Principals)
+        # Look for <Trustee><Name>...</Name></Trustee>
+        $trusteeNodes = $xml.SelectNodes("//Trustee/Name")
+        foreach ($node in $trusteeNodes) {
+            if (-not [string]::IsNullOrWhiteSpace($node.'#text')) {
+                $Principals += $node.'#text'
             }
         }
-        Write-Log -Message "Added $($data.Count) $Type mappings" -Level INFO
+
+        # 2. Extract UNC Paths
+        # Regex scan raw content for \\Server\Share patterns as they can appear in various nodes
+        $rawContent = Get-Content $file.FullName -Raw
+        $uncMatches = [regex]::Matches($rawContent, '\\\\[a-zA-Z0-9\-\._]+\\[a-zA-Z0-9\-\._\$]+')
+        foreach ($match in $uncMatches) {
+            $UNCPaths += $match.Value
+        }
+
+    } catch {
+        Write-Log -Message "Error parsing $($file.Name): $_" -Level WARN
     }
 }
 
-# Map Groups (Global, DomainLocal, Universal)
-# GPMC uses specific types, but 'GlobalGroup' is a safe default for most domain groups in migration tables
-Add-Mapping "Groups_*.csv" "GlobalGroup"
+# Deduplicate and Sort
+$UniquePrincipals = $Principals | Select-Object -Unique | Sort-Object
+$UniqueUNCs = $UNCPaths | Select-Object -Unique | Sort-Object
 
-# Map Users
-Add-Mapping "Users_*.csv" "User"
-Add-Mapping "ServiceAccounts_*.csv" "User"
+$TableData = @()
 
-# Map Computers (Less common in GPOs but possible)
-Add-Mapping "Computers_*.csv" "Computer"
-
-# Also map the Domain Root itself (for UNC paths like \\Source\SysVol)
-$Mappings += [PSCustomObject]@{
-    Type        = "Unknown"
-    Source      = $SourceDomain
-    Destination = $TargetDomain
+# Add Principals
+foreach ($p in $UniquePrincipals) {
+    $TableData += [PSCustomObject]@{
+        Type   = "Principal"
+        Source = $p
+        Target = "" # Placeholder for user input
+        Notes  = "Detected in GPO Report"
+    }
 }
 
-# Build XML
-$xmlHeader = '<?xml version="1.0" encoding="utf-8"?>'
-$xmlStart  = '<MigrationTable xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-$xmlEnd    = '</MigrationTable>'
-
-$xmlContent = New-Object System.Text.StringBuilder
-$xmlContent.AppendLine($xmlHeader) | Out-Null
-$xmlContent.AppendLine($xmlStart) | Out-Null
-
-foreach ($map in $Mappings) {
-    $xmlContent.AppendLine("  <Mapping>") | Out-Null
-    $xmlContent.AppendLine("    <Type>$($map.Type)</Type>") | Out-Null
-    $xmlContent.AppendLine("    <Source>$($map.Source)</Source>") | Out-Null
-    $xmlContent.AppendLine("    <Destination>$($map.Destination)</Destination>") | Out-Null
-    $xmlContent.AppendLine("  </Mapping>") | Out-Null
+# Add UNCs
+foreach ($u in $UniqueUNCs) {
+    $TableData += [PSCustomObject]@{
+        Type   = "UNCPath"
+        Source = $u
+        Target = "" # Placeholder for user input
+        Notes  = "Detected in GPO Report"
+    }
 }
 
-$xmlContent.AppendLine($xmlEnd) | Out-Null
+$outFile = Join-Path $TransformPath "GPO_MigrationTable_Draft.csv"
+$TableData | Export-Csv -Path $outFile -NoTypeInformation -Encoding UTF8
 
-$outputFile = Join-Path $TransformPath "GPO_MigrationTable.migtable"
-Set-Content -Path $outputFile -Value $xmlContent.ToString() -Encoding UTF8
+Write-Log -Message "Generated migration table draft with $($TableData.Count) entries at $outFile" -Level INFO
 
-Write-Log -Message "Migration Table generated at $outputFile" -Level INFO
 Write-Host "----------------------------------------------------------------" -ForegroundColor Cyan
-Write-Host "Migration Table Created: $outputFile"
-Write-Host "Contains $($Mappings.Count) mappings."
-Write-Host "Import-GPOs.ps1 will now automatically use this file." -ForegroundColor Yellow
+Write-Host "Migration Table Draft Generated: $outFile"
+Write-Host "Found $(($UniquePrincipals).Count) Principals and $(($UniqueUNCs).Count) UNC Paths."
+Write-Host "ACTION REQUIRED: Edit the 'Target' column in the CSV to map values to the new domain." -ForegroundColor Yellow
 Write-Host "----------------------------------------------------------------" -ForegroundColor Cyan
