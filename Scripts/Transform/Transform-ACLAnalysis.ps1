@@ -6,6 +6,9 @@
     Compares exported ACLs to expected inheritance and privilege boundaries.
 #>
 
+[CmdletBinding()]
+param()
+
 # Import module and config
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) 'Scripts') 'ADMigration\ADMigration.psd1'
@@ -25,11 +28,11 @@ Write-Log -Message "Starting ACL Analysis..." -Level INFO
 # 1. Load Identity Map (SIDs -> Names) from Account Exports
 $SidMap = @{}
 
-Function Load-SidMap {
+Function Import-SidMap {
     param($Pattern, $Type)
-    $files = Get-ChildItem -Path $SourceSecurityPath -Filter $Pattern | Sort-Object LastWriteTime -Descending
-    if ($files) {
-        $data = Import-Csv $files[0].FullName
+    $files = @(Get-ChildItem -Path $SourceSecurityPath -Filter $Pattern -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+    if ($files.Count -gt 0) {
+        $data = @(Import-Csv $files[0].FullName)
         foreach ($row in $data) {
             if ($row.SID) { $SidMap[$row.SID] = "$($row.SamAccountName) ($Type)" }
         }
@@ -37,10 +40,10 @@ Function Load-SidMap {
     }
 }
 
-Load-SidMap "Users_*.csv" "User"
-Load-SidMap "Groups_*.csv" "Group"
-Load-SidMap "Computers_*.csv" "Computer"
-Load-SidMap "ServiceAccounts_*.csv" "Svc"
+Import-SidMap "Users_*.csv" "User"
+Import-SidMap "Groups_*.csv" "Group"
+Import-SidMap "Computers_*.csv" "Computer"
+Import-SidMap "ServiceAccounts_*.csv" "Svc"
 
 # 2. Load latest ACL Export
 $aclFiles = Get-ChildItem -Path $SourceSecurityPath -Filter "ACLs_OUs_*.csv" | Sort-Object LastWriteTime -Descending

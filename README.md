@@ -31,7 +31,7 @@ AD-Migration/
 |   |
 |   |-- Transform/              # Transform phase scripts
 |   |   |-- Transform-OUMap.ps1
-|   |   |-- Transform-OUMap.designer.ps1
+|   |   |-- Transform-OUMap-GUI.ps1
 |   |   |-- Transform-AccountMapping.ps1
 |   |   |-- Transform-GenerateMigrationTable.ps1
 |   |   |-- Transform-GPOSettings.ps1
