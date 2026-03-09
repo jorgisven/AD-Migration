@@ -1,86 +1,104 @@
 <#
 .SYNOPSIS
-    Analyze GPO XML reports for domain-specific references.
-
+    Analyzes GPO settings for items requiring manual review.
 .DESCRIPTION
-    Scans exported GPO XML files for hardcoded paths (UNC), script locations, 
-    and domain-specific group references that need rewriting.
+    Scans GPO XML reports to find domain-specific settings like UNC paths,
+    scripts, and security principals in User Rights Assignments or Restricted Groups.
+    Outputs a CSV report for manual analysis.
 #>
-
-param(
-    [Parameter(Mandatory = $false)]
-    [string]$SourceDomain
-)
 
 # Import module and config
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) 'Scripts') 'ADMigration\ADMigration.psd1'
 if (-not (Test-Path $ModulePath)) { throw "Module manifest missing." }
 Import-Module $ModulePath -Force
-Write-Log -Message "Loaded ADMigration module from $ModulePath" -Level INFO
-if (-not (Get-Command Invoke-Safely -ErrorAction SilentlyContinue)) { throw "Invoke-Safely unavailable" }
 
 $config = Get-ADMigrationConfig
-$SourceGPOPath = Join-Path $config.ExportRoot 'GPO_Reports'
-$RewritePath = Join-Path $config.TransformRoot 'GPO_Rewrites'
+$ReportPath = Join-Path $config.ExportRoot 'GPO_Reports'
+$TransformPath = Join-Path $config.TransformRoot 'GPO_Analysis'
 
-# Ensure transform directory exists
-if (-not (Test-Path $RewritePath)) { New-Item -ItemType Directory -Path $RewritePath -Force | Out-Null }
+if (-not (Test-Path $TransformPath)) { New-Item -ItemType Directory -Path $TransformPath -Force | Out-Null }
 
-if (-not $SourceDomain) {
-    $SourceDomain = Read-Host "Enter source domain name to search for (e.g. source.local)"
+$xmlFiles = Get-ChildItem -Path $ReportPath -Filter "*.xml"
+if (-not $xmlFiles) { throw "Missing GPO Reports in '$ReportPath'. Run Export-GPOReports.ps1 first." }
+
+Write-Log -Message "Starting GPO settings analysis..." -Level INFO
+$AnalysisResults = [System.Collections.Generic.List[PSObject]]::new()
+
+$progress = 0
+foreach ($file in $xmlFiles) {
+    $progress++
+    Write-Progress -Activity "Analyzing GPO Reports" -Status "Processing $($file.Name)" -PercentComplete (($progress / $xmlFiles.Count) * 100)
+
+    [xml]$xml = Get-Content $file.FullName
+    $gpoName = $xml.GPO.Name
+
+    # 1. Find UNC Paths in Scripts (Logon, Logoff, etc.)
+    $xml.SelectNodes("//Script") | ForEach-Object {
+        if ($_.Exec -match "\\\\") {
+            $AnalysisResults.Add([PSCustomObject]@{
+                GPOName     = $gpoName
+                Category    = "Scripts"
+                SettingName = $_.Name
+                Value       = $_.Exec
+                Finding     = "UNC Path"
+                Notes       = "Verify path is accessible from target domain."
+            })
+        }
+    }
+
+    # 2. Find User Rights Assignments
+    $xml.SelectNodes("//Policy[Name='User Rights Assignment']/Value/Assignment") | ForEach-Object {
+        $rightName = $_.Name
+        $_.Member | ForEach-Object {
+            $AnalysisResults.Add([PSCustomObject]@{
+                GPOName     = $gpoName
+                Category    = "User Rights Assignment"
+                SettingName = $rightName
+                Value       = $_.Name
+                Finding     = "Security Principal"
+                Notes       = "Ensure this principal is mapped to the target domain."
+            })
+        }
+    }
+
+    # 3. Find Restricted Groups
+    $xml.SelectNodes("//Memberof/Group") | ForEach-Object {
+        $groupName = $_.Name
+        $_.Members | ForEach-Object {
+            $AnalysisResults.Add([PSCustomObject]@{
+                GPOName     = $gpoName
+                Category    = "Restricted Groups"
+                SettingName = "Members of '$groupName'"
+                Value       = $_.Name
+                Finding     = "Security Principal"
+                Notes       = "Ensure this principal is mapped to the target domain."
+            })
+        }
+    }
+    
+    # 4. Find Drive Mappings
+    $xml.SelectNodes("//DriveMapSettings/Drive") | ForEach-Object {
+        if ($_.path -match "\\\\") {
+            $AnalysisResults.Add([PSCustomObject]@{
+                GPOName     = $gpoName
+                Category    = "Drive Mappings"
+                SettingName = "Drive $($_.letter)"
+                Value       = $_.path
+                Finding     = "UNC Path"
+                Notes       = "Verify path is accessible from target domain."
+            })
+        }
+    }
 }
 
-Write-Log -Message "Starting GPO analysis for domain references: $SourceDomain" -Level INFO
-
-try {
-    $xmlFiles = Get-ChildItem -Path $SourceGPOPath -Filter "*.xml"
-    
-    if ($xmlFiles.Count -eq 0) {
-        Write-Log -Message "No GPO XML reports found in $SourceGPOPath. Run Export-GPOReports.ps1 first." -Level WARN
-        return
-    }
-
-    $findings = @()
-
-    foreach ($file in $xmlFiles) {
-        Write-Log -Message "Analyzing $($file.Name)..." -Level INFO
-        
-        # Read XML content as text for broad searching first
-        $content = Get-Content -Path $file.FullName -Raw
-        
-        # 1. Search for Source Domain references
-        if ($content -match [regex]::Escape($SourceDomain)) {
-            $findings += [PSCustomObject]@{
-                GPOName = ($file.Name -split '_')[0]
-                Type    = "DomainReference"
-                Detail  = "Contains reference to $SourceDomain"
-                File    = $file.Name
-            }
-        }
-
-        # 2. Search for UNC Paths
-        $uncMatches = [regex]::Matches($content, '\\\\[a-zA-Z0-9\-\.]+\\[a-zA-Z0-9\-\.\\\$]+')
-        foreach ($match in $uncMatches) {
-            $findings += [PSCustomObject]@{
-                GPOName = ($file.Name -split '_')[0]
-                Type    = "UNCPath"
-                Detail  = $match.Value
-                File    = $file.Name
-            }
-        }
-    }
-
-    $reportFile = Join-Path $RewritePath "GPO_Analysis_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
-    $findings | Select-Object GPOName, Type, Detail, File | Export-Csv -Path $reportFile -NoTypeInformation
-
-    Write-Log -Message "Analysis complete. Found $($findings.Count) potential issues." -Level INFO
-    Write-Host "----------------------------------------------------------------" -ForegroundColor Cyan
-    Write-Host "GPO Analysis generated: $reportFile"
-    Write-Host "Review this CSV to see which GPOs contain hardcoded paths" -ForegroundColor Yellow
-    Write-Host "or legacy domain references." -ForegroundColor Yellow
-    Write-Host "----------------------------------------------------------------" -ForegroundColor Cyan
-
-} catch {
-    Write-Log -Message "Failed to analyze GPOs: $_" -Level ERROR
+if ($AnalysisResults.Count -gt 0) {
+    $outFile = Join-Path $TransformPath "GPO_Analysis_Report.csv"
+    $AnalysisResults | Export-Csv -Path $outFile -NoTypeInformation -Encoding UTF8
+    Write-Host "[+] GPO Analysis Complete. Found $($AnalysisResults.Count) items for review." -ForegroundColor Green
+    Write-Host "Report saved to: $outFile" -ForegroundColor Green
+    Write-Log -Message "GPO Analysis complete. Report saved to $outFile" -Level INFO
+} else {
+    Write-Host "[+] GPO Analysis Complete. No specific items flagged for manual review." -ForegroundColor Green
+    Write-Log -Message "GPO Analysis complete. No specific items flagged for manual review." -Level INFO
 }

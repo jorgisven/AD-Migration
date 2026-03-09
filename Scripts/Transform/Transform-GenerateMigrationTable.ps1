@@ -1,11 +1,10 @@
 <#
 .SYNOPSIS
-    Generate a GPO Migration Table for mapping security principals and paths.
-
+    Generates a GPO migration table (.migtable).
 .DESCRIPTION
-    Scans exported GPO reports (XML) for references to the source domain (users, groups, UNC paths).
-    Creates a CSV mapping file. This file can be reviewed and then converted into a 
-    standard .migtable file for use with Import-GPO.
+    Scans GPO XML reports for security principals (SIDs) and UNC paths, then creates a
+    .migtable file. This file is used by Import-GPO to map old values to new ones.
+    It pre-populates mappings from the Identity_Map_Final.csv where possible.
 #>
 
 # Import module and config
@@ -13,93 +12,95 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) 'Scripts') 'ADMigration\ADMigration.psd1'
 if (-not (Test-Path $ModulePath)) { throw "Module manifest missing." }
 Import-Module $ModulePath -Force
-Write-Log -Message "Loaded ADMigration module from $ModulePath" -Level INFO
 
 $config = Get-ADMigrationConfig
-$GPOReportPath = Join-Path $config.ExportRoot 'GPO_Reports'
-$TransformPath = Join-Path $config.TransformRoot 'Mapping'
+$ReportPath = Join-Path $config.ExportRoot 'GPO_Reports'
+$MapPath = Join-Path $config.TransformRoot 'Mapping'
+$TransformPath = Join-Path $config.TransformRoot 'GPO_Analysis' # Save table here
 
-# Ensure transform directory exists
 if (-not (Test-Path $TransformPath)) { New-Item -ItemType Directory -Path $TransformPath -Force | Out-Null }
 
-Write-Log -Message "Starting Migration Table generation..." -Level INFO
+Write-Log -Message "Starting GPO Migration Table generation..." -Level INFO
 
-if (-not (Test-Path $GPOReportPath)) {
-    Write-Log -Message "GPO Reports folder not found at $GPOReportPath. Run Export-GPOReports.ps1 first." -Level ERROR
-    throw "Missing GPO Reports"
+# 1. Load Identity Map (for pre-populating)
+$IdentityMap = @{}
+$idMapFile = Join-Path $MapPath "Identity_Map_Final.csv"
+if (Test-Path $idMapFile) {
+    Import-Csv $idMapFile | ForEach-Object {
+        if (-not [string]::IsNullOrWhiteSpace($_.SourceSID)) {
+            $IdentityMap[$_.SourceSID] = $_.TargetSam
+        }
+    }
+    Write-Log -Message "Loaded $($IdentityMap.Count) entries from Identity Map." -Level INFO
 }
 
-$xmlFiles = Get-ChildItem -Path $GPOReportPath -Filter "*.xml"
-if ($xmlFiles.Count -eq 0) {
-    Write-Log -Message "No XML reports found in $GPOReportPath." -Level WARN
-    return
-}
+# 2. Scan GPO XMLs for principals and UNC paths
+$xmlFiles = Get-ChildItem -Path $ReportPath -Filter "*.xml"
+if (-not $xmlFiles) { throw "Missing GPO Reports in '$ReportPath'. Run Export-GPOReports.ps1 first." }
 
-Write-Log -Message "Scanning $($xmlFiles.Count) GPO reports..." -Level INFO
-
-$Principals = @()
-$UNCPaths = @()
+$uniqueSIDs = [System.Collections.Generic.HashSet[string]]::new()
+$uniqueUNCs = [System.Collections.Generic.HashSet[string]]::new()
 
 foreach ($file in $xmlFiles) {
-    try {
-        # Load XML
-        [xml]$xml = Get-Content $file.FullName -ErrorAction Stop
+    [xml]$xml = Get-Content $file.FullName
 
-        # 1. Extract Trustees (Security Principals)
-        # Look for <Trustee><Name>...</Name></Trustee>
-        $trusteeNodes = $xml.SelectNodes("//Trustee/Name")
-        foreach ($node in $trusteeNodes) {
-            if (-not [string]::IsNullOrWhiteSpace($node.'#text')) {
-                $Principals += $node.'#text'
-            }
-        }
-
-        # 2. Extract UNC Paths
-        # Regex scan raw content for \\Server\Share patterns as they can appear in various nodes
-        $rawContent = Get-Content $file.FullName -Raw
-        $uncMatches = [regex]::Matches($rawContent, '\\\\[a-zA-Z0-9\-\._]+\\[a-zA-Z0-9\-\._\$]+')
-        foreach ($match in $uncMatches) {
-            $UNCPaths += $match.Value
-        }
-
-    } catch {
-        Write-Log -Message "Error parsing $($file.Name): $_" -Level WARN
-    }
+    # Find all SIDs (from security filtering, user rights, restricted groups, etc.)
+    $xml.SelectNodes("//SID|//Member/SID") | ForEach-Object { $uniqueSIDs.Add($_.InnerText) | Out-Null }
+    
+    # Find all UNC paths
+    $uncMatches = [regex]::Matches($xml.OuterXml, "\\\\[a-zA-Z0-9\.\-]+\\[a-zA-Z0-9`$_\.\-]+")
+    $uncMatches | ForEach-Object { $uniqueUNCs.Add($_.Value) | Out-Null }
 }
 
-# Deduplicate and Sort
-$UniquePrincipals = $Principals | Select-Object -Unique | Sort-Object
-$UniqueUNCs = $UNCPaths | Select-Object -Unique | Sort-Object
+Write-Log -Message "Found $($uniqueSIDs.Count) unique SIDs and $($uniqueUNCs.Count) unique UNC paths in GPO reports." -Level INFO
 
-$TableData = @()
+# 3. Build the Migration Table XML
+$doc = New-Object System.Xml.XmlDocument
+$xmlDeclaration = $doc.CreateXmlDeclaration("1.0", "utf-8", $null)
+$doc.AppendChild($xmlDeclaration) | Out-Null
 
-# Add Principals
-foreach ($p in $UniquePrincipals) {
-    $TableData += [PSCustomObject]@{
-        Type   = "Principal"
-        Source = $p
-        Target = "" # Placeholder for user input
-        Notes  = "Detected in GPO Report"
+$root = $doc.CreateElement("MigrationTable")
+$root.SetAttribute("xmlns:xsd", "http://www.w3.org/2001/XMLSchema")
+$root.SetAttribute("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance")
+$root.SetAttribute("xmlns", "http://www.microsoft.com/GroupPolicy/GPOOperations/MigrationTable")
+$doc.AppendChild($root) | Out-Null
+
+# Add SID mappings
+foreach ($sid in $uniqueSIDs) {
+    $entry = $doc.CreateElement("Mapping")
+    
+    $source = $doc.CreateElement("Source"); $source.SetAttribute("xsi:type", "GPMTrustee"); $source.SetAttribute("Name", $sid); $source.SetAttribute("SID", $sid)
+    $entry.AppendChild($source) | Out-Null
+
+    $destination = $doc.CreateElement("Destination")
+    if ($IdentityMap.ContainsKey($sid)) {
+        $destination.SetAttribute("xsi:type", "GPMTrustee"); $destination.SetAttribute("Name", $IdentityMap[$sid]); $destination.SetAttribute("SID", $IdentityMap[$sid])
+    } else {
+        $destination.SetAttribute("xsi:type", "GPMTrustee"); $destination.SetAttribute("Name", ""); $destination.SetAttribute("SID", "")
     }
+    $entry.AppendChild($destination) | Out-Null
+    
+    $root.AppendChild($entry) | Out-Null
 }
 
-# Add UNCs
-foreach ($u in $UniqueUNCs) {
-    $TableData += [PSCustomObject]@{
-        Type   = "UNCPath"
-        Source = $u
-        Target = "" # Placeholder for user input
-        Notes  = "Detected in GPO Report"
-    }
+# Add UNC Path mappings
+foreach ($unc in $uniqueUNCs) {
+    $entry = $doc.CreateElement("Mapping")
+    
+    $source = $doc.CreateElement("Source"); $source.SetAttribute("xsi:type", "GPMPath"); $source.SetAttribute("Path", $unc)
+    $entry.AppendChild($source) | Out-Null
+
+    $destination = $doc.CreateElement("Destination"); $destination.SetAttribute("xsi:type", "GPMPath"); $destination.SetAttribute("Path", "")
+    $entry.AppendChild($destination) | Out-Null
+    
+    $root.AppendChild($entry) | Out-Null
 }
 
-$outFile = Join-Path $TransformPath "GPO_MigrationTable_Draft.csv"
-$TableData | Export-Csv -Path $outFile -NoTypeInformation -Encoding UTF8
+# 4. Save the file
+$outFile = Join-Path $MapPath "MigrationTable.migtable"
+$doc.Save($outFile)
 
-Write-Log -Message "Generated migration table draft with $($TableData.Count) entries at $outFile" -Level INFO
-
-Write-Host "----------------------------------------------------------------" -ForegroundColor Cyan
-Write-Host "Migration Table Draft Generated: $outFile"
-Write-Host "Found $(($UniquePrincipals).Count) Principals and $(($UniqueUNCs).Count) UNC Paths."
-Write-Host "ACTION REQUIRED: Edit the 'Target' column in the CSV to map values to the new domain." -ForegroundColor Yellow
-Write-Host "----------------------------------------------------------------" -ForegroundColor Cyan
+Write-Host "[+] Migration Table generated successfully." -ForegroundColor Green
+Write-Host "File saved to: $outFile" -ForegroundColor Green
+Write-Host "Please review and complete the empty <Destination> entries in this file before running the GPO import." -ForegroundColor Yellow
+Write-Log -Message "Migration Table saved to $outFile" -Level INFO

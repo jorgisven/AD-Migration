@@ -4,7 +4,7 @@ A PowerShell-based Active Directory migration framework for orchestrating clean,
 
 ## 📋 Overview
 
-This repository contains scripts, documentation, and mapping artifacts to execute a three-phase Active Directory migration pipeline:
+This repository contains scripts, documentation, and mapping artifacts to execute a three-phase Active Directory migration pipeline, orchestrated by a central GUI:
 
 ```
 Export (Source)  →  Transform (Workstation)  →  Import (Target)

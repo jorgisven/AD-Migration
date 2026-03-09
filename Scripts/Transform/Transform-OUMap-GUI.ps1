@@ -66,6 +66,16 @@ $lblSource.Text = "Source Domain (Read-Only)"
 $lblSource.Dock = "Top"
 $splitContainer.Panel1.Controls.Add($lblSource)
 
+# Search Source
+$pnlSourceSearch = New-Object System.Windows.Forms.Panel
+$pnlSourceSearch.Height = 25
+$pnlSourceSearch.Dock = "Top"
+$splitContainer.Panel1.Controls.Add($pnlSourceSearch)
+
+$btnSourceSearch = New-Object System.Windows.Forms.Button; $btnSourceSearch.Text = "Find"; $btnSourceSearch.Width = 50; $btnSourceSearch.Dock = "Right"; $pnlSourceSearch.Controls.Add($btnSourceSearch)
+$txtSourceSearch = New-Object System.Windows.Forms.TextBox; $txtSourceSearch.Dock = "Fill"; $pnlSourceSearch.Controls.Add($txtSourceSearch)
+$txtSourceSearch.BringToFront()
+
 $treeSource = New-Object System.Windows.Forms.TreeView
 $treeSource.Dock = "Fill"
 $treeSource.AllowDrop = $false # Source is drag source only
@@ -76,6 +86,16 @@ $lblTarget = New-Object System.Windows.Forms.Label
 $lblTarget.Text = "Target Domain (Drag here to Map)"
 $lblTarget.Dock = "Top"
 $splitContainer.Panel2.Controls.Add($lblTarget)
+
+# Search Target
+$pnlTargetSearch = New-Object System.Windows.Forms.Panel
+$pnlTargetSearch.Height = 25
+$pnlTargetSearch.Dock = "Top"
+$splitContainer.Panel2.Controls.Add($pnlTargetSearch)
+
+$btnTargetSearch = New-Object System.Windows.Forms.Button; $btnTargetSearch.Text = "Find"; $btnTargetSearch.Width = 50; $btnTargetSearch.Dock = "Right"; $pnlTargetSearch.Controls.Add($btnTargetSearch)
+$txtTargetSearch = New-Object System.Windows.Forms.TextBox; $txtTargetSearch.Dock = "Fill"; $pnlTargetSearch.Controls.Add($txtTargetSearch)
+$txtTargetSearch.BringToFront()
 
 $treeTarget = New-Object System.Windows.Forms.TreeView
 $treeTarget.Dock = "Fill"
@@ -131,7 +151,7 @@ function Add-NodeToTree ($tree, $dn, $tagData) {
             # If this is the leaf node (the full DN), attach the data
             if ($part -eq $parts[-1] -and $tagData) {
                 $currentNode.Tag = $tagData
-                $currentNode.ForeColor = "DarkBlue"
+                $currentNode.ForeColor = if ($tagData.SourceDN -eq 'PRE-EXISTING') { [System.Drawing.Color]::Gray } else { [System.Drawing.Color]::DarkBlue }
             }
 
             $nodesCollection.Add($currentNode) | Out-Null
@@ -139,6 +159,43 @@ function Add-NodeToTree ($tree, $dn, $tagData) {
         $nodesCollection = $currentNode.Nodes
     }
     return $currentNode
+}
+
+function Search-Tree ($tree, $text) {
+    if ([string]::IsNullOrWhiteSpace($text)) { return }
+    
+    $foundNodes = @()
+    
+    # Recursive search
+    function Find-Nodes ($nodes) {
+        foreach ($node in $nodes) {
+            # Reset color
+            $node.BackColor = [System.Drawing.Color]::Empty
+            
+            if ($node.Text -like "*$text*") {
+                $foundNodes += $node
+            }
+            
+            if ($node.Nodes.Count -gt 0) {
+                Find-Nodes $node.Nodes
+            }
+        }
+    }
+    
+    $tree.BeginUpdate()
+    Find-Nodes $tree.Nodes
+    
+    if ($foundNodes.Count -gt 0) {
+        foreach ($node in $foundNodes) {
+            $node.EnsureVisible()
+            $node.BackColor = [System.Drawing.Color]::Yellow
+        }
+        $tree.SelectedNode = $foundNodes[0]
+        $tree.Focus()
+    } else {
+        [System.Windows.Forms.MessageBox]::Show("No matches found.", "Search", "OK", "Information")
+    }
+    $tree.EndUpdate()
 }
 
 # Populate Source Tree
@@ -158,24 +215,55 @@ $treeSource.EndUpdate()
 # Initialize Target Tree
 $treeTarget.BeginUpdate()
 
-# Check for existing draft
+# --- Pre-load from Live Target Domain (Optional) ---
+$msg = "Do you want to load the existing OU structure from the live target domain '$TargetDomain'?`n`nThis is useful if you are mapping into a pre-existing structure."
+$result = [System.Windows.Forms.MessageBox]::Show($msg, "Load Target Structure", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+
+if ($result -eq 'Yes') {
+    try {
+        Write-Host "Attempting to connect to $TargetDomain to load existing OUs..." -ForegroundColor Yellow
+        $TargetOUs = Get-ADOrganizationalUnit -Filter * -Server $TargetDomain -Properties Description | Sort-Object { $_.DistinguishedName.Length }
+        Write-Host "Found $($TargetOUs.Count) existing OUs in target domain." -ForegroundColor Green
+        
+        # Add the domain root first
+        Add-NodeToTree -tree $treeTarget -dn $TargetDomain -tagData $null | Out-Null
+        
+        foreach ($ou in $TargetOUs) {
+            # Create a tag for these so we know they are pre-existing, not from a source mapping
+            $tag = @{
+                SourceDN    = "PRE-EXISTING"
+                Description = $ou.Description
+                SourceOU    = $ou.Name
+            }
+            Add-NodeToTree -tree $treeTarget -dn $ou.DistinguishedName -tagData $tag | Out-Null
+        }
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to connect to target domain '$TargetDomain'.`n`nError: $($_.Exception.Message)`n`nContinuing with an empty target structure.", "Connection Error", "OK", "Error")
+        # If it fails, just add the root node
+        Add-NodeToTree -tree $treeTarget -dn $TargetDomain -tagData $null | Out-Null
+    }
+} else {
+    # User said no, just add the root node
+    Add-NodeToTree -tree $treeTarget -dn $TargetDomain -tagData $null | Out-Null
+}
+
+# Check for existing draft and merge it on top of the current view
 $draftFile = Join-Path $MapPath "OU_Map_Draft.csv"
 if (Test-Path $draftFile) {
+    Write-Host "Loading existing draft file: $draftFile" -ForegroundColor Cyan
     $Draft = Import-Csv $draftFile
     foreach ($row in $Draft) {
         if ($row.Action -ne 'Skip') {
             $tag = @{
-                SourceDN = $row.SourceDN
+                SourceDN    = $row.SourceDN
                 Description = $row.Description
-                SourceOU = $row.SourceOU
+                SourceOU    = $row.SourceOU
             }
             Add-NodeToTree -tree $treeTarget -dn $row.TargetDN -tagData $tag | Out-Null
         }
     }
-} else {
-    # Default Root
-    Add-NodeToTree -tree $treeTarget -dn $TargetDomain -tagData $null | Out-Null
 }
+
 $treeTarget.ExpandAll()
 $treeTarget.EndUpdate()
 
@@ -206,6 +294,25 @@ $treeTarget.Add_DragDrop({
     $targetPoint = $eventSender.PointToClient([System.Drawing.Point]::new($e.X, $e.Y))
     $targetNode = $eventSender.GetNodeAt($targetPoint)
     $draggedNode = $e.Data.GetData([System.Windows.Forms.TreeNode])
+
+    # Handle MERGE action (dragging from source onto an existing target node)
+    if ($targetNode -and $draggedNode -and ($draggedNode.TreeView -eq $treeSource)) {
+        # A node with a Tag is either pre-existing or already mapped.
+        if ($targetNode.Tag) {
+            $msg = "You are dropping onto an existing target OU.`n`nSource: '$($draggedNode.Text)'`nTarget: '$($targetNode.Text)'`n`nWould you like to:`n`n[Yes] Map the source OU to this target OU (Merge).`n[No] Create the source OU as a new child of the target OU.`n[Cancel] Abort the operation."
+            $result = [System.Windows.Forms.MessageBox]::Show($msg, "Merge or Add as Child?", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel, [System.Windows.Forms.MessageBoxIcon]::Question)
+            
+            if ($result -eq 'Yes') {
+                # Perform the merge: copy the tag from source to target.
+                $targetNode.Tag = $draggedNode.Tag
+                $targetNode.ForeColor = [System.Drawing.Color]::DarkBlue # Mark as mapped
+                return # The drop action is complete.
+            } elseif ($result -eq 'Cancel') {
+                return # Cancel the drop entirely
+            }
+            # If user says No, we fall through to the default "add as child" behavior.
+        }
+    }
 
     if ($targetNode -and $draggedNode) {
         # Prevent dropping into itself or children
@@ -254,8 +361,7 @@ $itemNew = $ctxMenu.MenuItems.Add("New OU")
 $itemNew.Add_Click({
     if ($treeTarget.SelectedNode) {
         $newNode = New-Object System.Windows.Forms.TreeNode
-        $newNode.Text = "NewOU"
-        $newNode.Name = "OU=NewOU"
+        $newNode.Text = "OU=NewOU"
         $treeTarget.SelectedNode.Nodes.Add($newNode) | Out-Null
         $treeTarget.SelectedNode.Expand()
         $newNode.BeginEdit()
@@ -354,6 +460,13 @@ $btnSave.Add_Click({
 
     [System.Windows.Forms.MessageBox]::Show("Mapping saved to:`n$outFile", "Success", "OK", "Information")
 })
+
+# Search Handlers
+$btnSourceSearch.Add_Click({ Search-Tree $treeSource $txtSourceSearch.Text })
+$txtSourceSearch.Add_KeyDown({ if ($_.KeyCode -eq 'Enter') { Search-Tree $treeSource $txtSourceSearch.Text; $_.SuppressKeyPress = $true } })
+
+$btnTargetSearch.Add_Click({ Search-Tree $treeTarget $txtTargetSearch.Text })
+$txtTargetSearch.Add_KeyDown({ if ($_.KeyCode -eq 'Enter') { Search-Tree $treeTarget $txtTargetSearch.Text; $_.SuppressKeyPress = $true } })
 
 # --- SHOW ---
 

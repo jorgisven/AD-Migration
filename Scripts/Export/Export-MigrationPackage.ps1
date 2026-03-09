@@ -69,11 +69,8 @@ IF ANALYZING (Analyst Workstation):
      Scripts\Transform\Run-AllTransforms.ps1
 
 IF IMPORTING (Target Domain):
-   - Run the following scripts AS ADMINISTRATOR in this order:
-     1. Scripts\Import\Import-OUs.ps1
-     2. Scripts\Import\Import-GPOs.ps1
-     3. Scripts\Import\Import-WMIFilters.ps1
-     4. Scripts\Import\Import-GPOLinks.ps1
+   - Run the import orchestrator AS ADMINISTRATOR:
+     Scripts\Import\Run-AllImports.ps1
 "@
 
     Write-Host "✅ Migration Package Created: $ZipPath" -ForegroundColor Green

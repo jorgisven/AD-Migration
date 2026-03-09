@@ -10,6 +10,13 @@ The project follows a strict **Export -> Transform -> Import** pipeline to migra
 2.  **Transform**: Offline manipulation of exported data (mapping OUs, rewriting GPOs). Saves to `%USERPROFILE%\Documents\ADMigration\Transform`.
 3.  **Import**: Creation of objects in Target AD using Transformed data. Reads from `Transform` folder.
 
+### Orchestration
+The project is orchestrated by a main GUI and individual phase-runners:
+- **`Start-MigrationGUI.ps1`**: The primary entry point. It provides a simple GUI to launch the Export, Transform, or Import phase.
+- **`Scripts\Export\Run-AllExports.ps1`**: Executes all export scripts in sequence.
+- **`Scripts\Transform\Run-AllTransforms.ps1`**: An interactive wizard that guides the user through the manual mapping and automated transform steps.
+- **`Scripts\Import\Run-AllImports.ps1`**: Executes all import scripts in sequence, requiring Administrator privileges.
+
 ### Directory Structure
 - `Scripts\ADMigration\`: The core module (`ADMigration.psd1`, `psm1`).
 - `Scripts\Export\`: Scripts for Phase 1.
