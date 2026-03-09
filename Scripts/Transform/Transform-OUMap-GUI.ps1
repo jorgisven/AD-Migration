@@ -129,14 +129,15 @@ function Add-NodeToTree ($tree, $dn, $tagData) {
     # For robust DN parsing, specific regex is needed, but this suffices for visualization.
     
     # We only care about OUs and DCs.
-    $parts = $dn -split "(?<!\\)," | ForEach-Object { $_.Trim() }
+    $parts = @($dn -split "(?<!\\)," | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrEmpty($_) })
     # Reverse to build from root up
     [array]::Reverse($parts)
     
     $currentNode = $null
     $nodesCollection = $tree.Nodes
 
-    foreach ($part in $parts) {
+    for ($i = 0; $i -lt $parts.Count; $i++) {
+        $part = $parts[$i]
         # Check if node exists at this level
         $found = $nodesCollection | Where-Object { $_.Text -eq $part } | Select-Object -First 1
         
@@ -149,7 +150,7 @@ function Add-NodeToTree ($tree, $dn, $tagData) {
             $currentNode.ImageIndex = 0
             
             # If this is the leaf node (the full DN), attach the data
-            if ($part -eq $parts[-1] -and $tagData) {
+            if ($i -eq ($parts.Count - 1) -and $tagData) {
                 $currentNode.Tag = $tagData
                 $currentNode.ForeColor = if ($tagData.SourceDN -eq 'PRE-EXISTING') { [System.Drawing.Color]::Gray } else { [System.Drawing.Color]::DarkBlue }
             }
@@ -221,8 +222,10 @@ $result = [System.Windows.Forms.MessageBox]::Show($msg, "Load Target Structure",
 
 if ($result -eq 'Yes') {
     try {
-        Write-Host "Attempting to connect to $TargetDomain to load existing OUs..." -ForegroundColor Yellow
-        $TargetOUs = Get-ADOrganizationalUnit -Filter * -Server $TargetDomain -Properties Description | Sort-Object { $_.DistinguishedName.Length }
+        # The -Server parameter requires an FQDN (e.g., target.local), not a DN (e.g., DC=target,DC=local). Convert it.
+        $TargetServer = ($TargetDomain -replace 'DC=','' -split '(?<!\\),' | Join-Object -Separator '.')
+        Write-Host "Attempting to connect to server '$TargetServer' to load existing OUs..." -ForegroundColor Yellow
+        $TargetOUs = Get-ADOrganizationalUnit -Filter * -Server $TargetServer -Properties Description | Sort-Object { $_.DistinguishedName.Length }
         Write-Host "Found $($TargetOUs.Count) existing OUs in target domain." -ForegroundColor Green
         
         # Add the domain root first
@@ -238,7 +241,7 @@ if ($result -eq 'Yes') {
             Add-NodeToTree -tree $treeTarget -dn $ou.DistinguishedName -tagData $tag | Out-Null
         }
     } catch {
-        [System.Windows.Forms.MessageBox]::Show("Failed to connect to target domain '$TargetDomain'.`n`nError: $($_.Exception.Message)`n`nContinuing with an empty target structure.", "Connection Error", "OK", "Error")
+        [System.Windows.Forms.MessageBox]::Show("Failed to connect to target domain '$TargetServer'.`n`nError: $($_.Exception.Message)`n`nContinuing with an empty target structure.", "Connection Error", "OK", "Error")
         # If it fails, just add the root node
         Add-NodeToTree -tree $treeTarget -dn $TargetDomain -tagData $null | Out-Null
     }

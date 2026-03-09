@@ -32,17 +32,18 @@ foreach ($file in $xmlFiles) {
 
     [xml]$xml = Get-Content $file.FullName
     $gpoName = $xml.GPO.Name
+    
+    # Regex to find UNC paths like \\server\share, allowing for spaces in the share name and underscores in the server name.
+    $uncRegex = "\\\\[a-zA-Z0-9\.\-_]+\\[a-zA-Z0-9`$_\.\- ]+"
 
     # 1. Find UNC Paths in Scripts (Logon, Logoff, etc.)
     $xml.SelectNodes("//Script") | ForEach-Object {
-        if ($_.Exec -match "\\\\") {
+        $uncMatches = [regex]::Matches($_.Exec, $uncRegex)
+        foreach ($match in $uncMatches) {
             $AnalysisResults.Add([PSCustomObject]@{
-                GPOName     = $gpoName
-                Category    = "Scripts"
-                SettingName = $_.Name
-                Value       = $_.Exec
-                Finding     = "UNC Path"
-                Notes       = "Verify path is accessible from target domain."
+                GPOName     = $gpoName; Category    = "Scripts"
+                SettingName = $_.Name;   Value       = $match.Value
+                Finding     = "UNC Path"; Notes       = "Verify path is accessible from target domain."
             })
         }
     }
@@ -79,12 +80,13 @@ foreach ($file in $xmlFiles) {
     
     # 4. Find Drive Mappings
     $xml.SelectNodes("//DriveMapSettings/Drive") | ForEach-Object {
-        if ($_.path -match "\\\\") {
+        $uncMatches = [regex]::Matches($_.path, $uncRegex)
+        foreach ($match in $uncMatches) {
             $AnalysisResults.Add([PSCustomObject]@{
                 GPOName     = $gpoName
                 Category    = "Drive Mappings"
                 SettingName = "Drive $($_.letter)"
-                Value       = $_.path
+                Value       = $match.Value
                 Finding     = "UNC Path"
                 Notes       = "Verify path is accessible from target domain."
             })

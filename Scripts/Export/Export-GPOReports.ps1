@@ -15,6 +15,14 @@ param(
 # Add GUI support
 Add-Type -AssemblyName System.Windows.Forms
 
+# Add P/Invoke to bring window to foreground to ensure prompts are visible
+Add-Type -MemberDefinition @"
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+"@ -Name Win32SetForegroundWindow -Namespace Win32Functions -PassThru | Out-Null
+
+
 # Import module and config
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) 'Scripts') 'ADMigration\ADMigration.psd1'
@@ -80,7 +88,7 @@ try {
                 Get-GPOReport -Guid $GPO.Id -ReportType Xml -Path $xmlPath -Server $SourceDomain
 
                 # Perform actual GPO Backup (Required for Import)
-                Backup-GPO -Guid $GPO.Id -Path $BackupPath -Server $SourceDomain | Out-Null
+                Backup-GPO -Guid $GPO.Id -Path $BackupPath -Server $SourceDomain -ProgressAction SilentlyContinue | Out-Null
 
                 # Check if GPO is linked ONLY to empty OUs
                 [xml]$xmlData = Get-Content $xmlPath
@@ -116,6 +124,12 @@ try {
         
         # Handle Empty-Linked GPOs
         if ($EmptyLinkedGPOs.Count -gt 0) {
+            # Bring the console window to the front to make sure the user sees this prompt
+            try {
+                $myWindowHandle = (Get-Process -Id $PID).MainWindowHandle
+                [Win32Functions.Win32SetForegroundWindow]::SetForegroundWindow($myWindowHandle) | Out-Null
+            } catch {}
+
             $msg = "Found $($EmptyLinkedGPOs.Count) GPOs that are linked ONLY to empty OUs.`n`nDo you want to EXPORT them or SKIP (delete) them?"
             $result = [System.Windows.Forms.MessageBox]::Show($msg, "Empty-Linked GPOs Detected", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
             

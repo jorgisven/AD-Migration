@@ -46,6 +46,30 @@ if (-not $MigrationTablePath) {
     }
 }
 
+# Validate Migration Table if present
+if ($MigrationTablePath) {
+    if (-not (Test-Path $MigrationTablePath)) {
+        throw "Migration Table file not found at '$MigrationTablePath'"
+    }
+    
+    # Check for unmapped entries which cause Import-GPO to fail
+    try {
+        [xml]$migTableXml = Get-Content $MigrationTablePath
+        $unmapped = $migTableXml.MigrationTable.Mapping | Where-Object { 
+            ($_.Destination.SID -eq "" -or $_.Destination.SID -eq $null) -and 
+            ($_.Destination.Path -eq "" -or $_.Destination.Path -eq $null) 
+        }
+        if ($unmapped) {
+            throw "The Migration Table contains $($unmapped.Count) unmapped entries (empty Destination). Please review and edit '$MigrationTablePath' before importing."
+        }
+        Write-Log -Message "Using validated Migration Table: $MigrationTablePath" -Level INFO
+    } catch {
+        throw "Migration Table Validation Failed: $_"
+    }
+} else {
+    Write-Log -Message "No Migration Table specified or detected. GPOs will be imported with original security principals and paths." -Level WARN
+}
+
 if (-not (Test-Path $BackupPath)) {
     Write-Log -Message "GPO Backup directory not found at $BackupPath. Ensure Export-GPOs (or manual backup) was run." -Level ERROR
     throw "Missing GPO Backups"
@@ -85,10 +109,8 @@ Invoke-Safely -ScriptBlock {
             ErrorAction    = 'Stop'
         }
         
-        if ($MigrationTablePath -and (Test-Path $MigrationTablePath)) {
+        if ($MigrationTablePath) {
             $params.MigrationTable = $MigrationTablePath
-        } elseif ($MigrationTablePath) {
-            Write-Log -Message "Migration table specified but not found: $MigrationTablePath" -Level WARN
         }
         
         try {

@@ -45,13 +45,19 @@ Invoke-Safely -ScriptBlock {
     $OUs = Import-Csv -Path $latestExport.FullName
     $MappingData = @()
 
+    # Helper to escape special characters in DN (e.g. "Sales, West" -> "Sales\, West")
+    # Characters to escape: , \ # + < > ; " =
+    $specialChars = '([,#"<>;=\\])'
+
     foreach ($ou in $OUs) {
         # Create a draft mapping entry
         # By default, we suggest mapping to the same name, but mark it as 'Migrate'
         
-        $targetDN = "OU=$($ou.OU),OU=Migrated,DC=Target,DC=Local" # Default placeholder
+        $escapedName = $ou.OU -replace $specialChars, '\$1'
+        
+        $targetDN = "OU=$escapedName,OU=Migrated,DC=Target,DC=Local" # Default placeholder
         if ($TargetBaseDN) {
-            $targetDN = "OU=$($ou.OU),$TargetBaseDN"
+            $targetDN = "OU=$escapedName,$TargetBaseDN"
         }
 
         $MappingData += [PSCustomObject]@{

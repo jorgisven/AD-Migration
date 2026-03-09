@@ -64,17 +64,29 @@ try {
 
     $TransformedFilters = @()
 
+    # Derive NetBIOS names for replacement
+    $SourceNetBIOS = if ($SourceDomain) { ($SourceDomain -split '\.')[0] } else { $null }
+    $TargetNetBIOS = if ($TargetDomain) { ($TargetDomain -split '\.')[0] } else { $null }
+
     foreach ($filter in $Filters) {
         $query = $filter.Query
         $name = $filter.FilterName
         $desc = $filter.FilterDescription
         $status = "Unchanged"
 
-        # Simple replacement logic if domains are provided
+        # Replacement logic if domains are provided
+        # 1. Replace FQDN
         if ($SourceDomain -and $TargetDomain -and $query -match $SourceDomain) {
             $query = $query -replace [regex]::Escape($SourceDomain), $TargetDomain
             $status = "Modified"
-            Write-Log -Message "Updated domain reference in filter '$name'" -Level INFO
+            Write-Log -Message "Updated FQDN domain reference in filter '$name'" -Level INFO
+        }
+
+        # 2. Replace NetBIOS name
+        if ($SourceNetBIOS -and $TargetNetBIOS -and $SourceNetBIOS -ne $TargetNetBIOS -and $query -match [regex]::Escape($SourceNetBIOS)) {
+            $query = $query -replace [regex]::Escape($SourceNetBIOS), $TargetNetBIOS
+            $status = "Modified"
+            Write-Log -Message "Updated NetBIOS domain reference in filter '$name'" -Level INFO
         }
 
         # Apply custom replacements (e.g. server names, share paths)

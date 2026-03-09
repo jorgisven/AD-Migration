@@ -7,6 +7,12 @@
     It pre-populates mappings from the Identity_Map_Final.csv where possible.
 #>
 
+[CmdletBinding()]
+param(
+    [string]$SourceDomain,
+    [string]$TargetDomain
+)
+
 # Import module and config
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) 'Scripts') 'ADMigration\ADMigration.psd1'
@@ -48,7 +54,9 @@ foreach ($file in $xmlFiles) {
     $xml.SelectNodes("//SID|//Member/SID") | ForEach-Object { $uniqueSIDs.Add($_.InnerText) | Out-Null }
     
     # Find all UNC paths
-    $uncMatches = [regex]::Matches($xml.OuterXml, "\\\\[a-zA-Z0-9\.\-]+\\[a-zA-Z0-9`$_\.\-]+")
+    # This regex finds paths like \\server\share, allowing for spaces in the share name and underscores in the server name.
+    # It is intentionally not greedy and stops at the first share level, which is what the migration table requires.
+    $uncMatches = [regex]::Matches($xml.OuterXml, "\\\\[a-zA-Z0-9\.\-_]+\\[a-zA-Z0-9`$_\.\- ]+")
     $uncMatches | ForEach-Object { $uniqueUNCs.Add($_.Value) | Out-Null }
 }
 
@@ -74,7 +82,13 @@ foreach ($sid in $uniqueSIDs) {
 
     $destination = $doc.CreateElement("Destination")
     if ($IdentityMap.ContainsKey($sid)) {
-        $destination.SetAttribute("xsi:type", "GPMTrustee"); $destination.SetAttribute("Name", $IdentityMap[$sid]); $destination.SetAttribute("SID", $IdentityMap[$sid])
+        $targetName = $IdentityMap[$sid]
+        # If TargetDomain is provided, try to qualify the name
+        if ($TargetDomain -and $targetName -notmatch "\\") {
+            $shortDomain = $TargetDomain.Split('.')[0]
+            $targetName = "$shortDomain\$targetName"
+        }
+        $destination.SetAttribute("xsi:type", "GPMTrustee"); $destination.SetAttribute("Name", $targetName); $destination.SetAttribute("SID", "")
     } else {
         $destination.SetAttribute("xsi:type", "GPMTrustee"); $destination.SetAttribute("Name", ""); $destination.SetAttribute("SID", "")
     }
