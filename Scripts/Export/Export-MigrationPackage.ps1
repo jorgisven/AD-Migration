@@ -63,14 +63,8 @@ Location: $ZipPath
 NEXT STEPS:
 1. Transfer this ZIP file to your destination machine (Analyst Workstation or Target Domain).
 2. Extract the archive.
-
-IF ANALYZING (Analyst Workstation):
-   - Run the interactive transform wizard (No Admin required):
-     Scripts\Transform\Run-AllTransforms.ps1
-
-IF IMPORTING (Target Domain):
-   - Run the import orchestrator AS ADMINISTRATOR:
-     Scripts\Import\Run-AllImports.ps1
+3. Run `Start-MigrationGUI.ps1` from the root of the extracted folder.
+4. Use the GUI buttons to proceed with the **Transform** or **Import** phase.
 "@
 
     Write-Host "✅ Migration Package Created: $ZipPath" -ForegroundColor Green

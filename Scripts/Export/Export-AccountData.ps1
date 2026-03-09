@@ -192,45 +192,86 @@ try {
         # Find which of these groups actually exist in the source domain
         $FoundPrivilegedGroups = $Groups | Where-Object { $_.Name -in $DefaultRestrictedGroups } | Select-Object -ExpandProperty Name
 
-        if ($FoundPrivilegedGroups.Count -gt 0) {
+        # Pre-scan privileged groups for members to filter out empty ones and prepare for GUI
+        $PrivilegedGroupData = @{}
+        foreach ($pGroup in $FoundPrivilegedGroups) {
+            $gObj = $Groups | Where-Object { $_.Name -eq $pGroup } | Select-Object -First 1
+            try {
+                $members = Get-ADGroupMember -Identity $gObj.DistinguishedName -Server $SourceDomain -ErrorAction SilentlyContinue
+                if ($members) {
+                    $PrivilegedGroupData[$pGroup] = @{
+                        GroupObject = $gObj
+                        Members = $members
+                    }
+                }
+            } catch {}
+        }
+
+        $GroupsWithMembers = $PrivilegedGroupData.Keys | Sort-Object
+        $KeptPrivilegedMemberships = @()
+
+        if ($GroupsWithMembers.Count -gt 0) {
             # Build and show a custom form
             $form = New-Object System.Windows.Forms.Form
             $form.Text = "High-Privilege Group Memberships"
-            $form.Size = New-Object System.Drawing.Size(500, 300)
+            $form.Size = New-Object System.Drawing.Size(500, 450)
             $form.StartPosition = "CenterScreen"
 
-            $label = New-Object System.Windows.Forms.Label; $label.Text = "The following high-privilege groups were found. How should their memberships be handled?"; $label.Location = New-Object System.Drawing.Point(10, 10); $label.Size = New-Object System.Drawing.Size(460, 30); $form.Controls.Add($label)
-            $listBox = New-Object System.Windows.Forms.ListBox; $listBox.Location = New-Object System.Drawing.Point(10, 45); $listBox.Size = New-Object System.Drawing.Size(460, 120); $form.Controls.Add($listBox)
-            $FoundPrivilegedGroups | ForEach-Object { [void]$listBox.Items.Add($_) }
+            $label = New-Object System.Windows.Forms.Label; $label.Text = "The following high-privilege groups have members. Select which memberships to KEEP in the export."; $label.Location = New-Object System.Drawing.Point(10, 10); $label.Size = New-Object System.Drawing.Size(460, 30); $form.Controls.Add($label)
+            
+            $treeView = New-Object System.Windows.Forms.TreeView
+            $treeView.Location = New-Object System.Drawing.Point(10, 50)
+            $treeView.Size = New-Object System.Drawing.Size(460, 300)
+            $treeView.CheckBoxes = $true
+            $form.Controls.Add($treeView)
+            
+            foreach ($grpName in $GroupsWithMembers) {
+                $node = $treeView.Nodes.Add($grpName)
+                foreach ($member in $PrivilegedGroupData[$grpName].Members) {
+                    # Filter out default nested groups to avoid confusion (e.g. Domain Admins inside Administrators)
+                    # These links exist by default in the target and unchecking them here won't break that default inheritance.
+                    if ($grpName -eq "Administrators" -and $member.SamAccountName -in @("Domain Admins", "Enterprise Admins")) {
+                        continue
+                    }
+                    $mNode = $node.Nodes.Add("$($member.Name) ($($member.SamAccountName))")
+                    $mNode.Tag = $member
+                }
+            }
+            
+            # Cascade check events
+            $treeView.Add_AfterCheck({
+                param($sourceControl, $e)
+                if ($e.Action -ne 'Unknown') { 
+                    foreach ($child in $e.Node.Nodes) {
+                        $child.Checked = $e.Node.Checked
+                    }
+                }
+            })
 
-            $btnKeep = New-Object System.Windows.Forms.Button; $btnKeep.Text = "Keep Privileges"; $btnKeep.DialogResult = [System.Windows.Forms.DialogResult]::Yes; $btnKeep.Location = New-Object System.Drawing.Point(10, 180); $btnKeep.Size = New-Object System.Drawing.Size(150, 40); $form.Controls.Add($btnKeep)
-            $btnRemove = New-Object System.Windows.Forms.Button; $btnRemove.Text = "Remove Privileges"; $btnRemove.DialogResult = [System.Windows.Forms.DialogResult]::No; $btnRemove.Location = New-Object System.Drawing.Point(170, 180); $btnRemove.Size = New-Object System.Drawing.Size(150, 40); $form.Controls.Add($btnRemove)
-            $btnCustomize = New-Object System.Windows.Forms.Button; $btnCustomize.Text = "Customize..."; $btnCustomize.DialogResult = [System.Windows.Forms.DialogResult]::Retry; $btnCustomize.Location = New-Object System.Drawing.Point(330, 180); $btnCustomize.Size = New-Object System.Drawing.Size(150, 40); $form.Controls.Add($btnCustomize)
+            $btnKeep = New-Object System.Windows.Forms.Button; $btnKeep.Text = "Export Selected"; $btnKeep.DialogResult = [System.Windows.Forms.DialogResult]::Yes; $btnKeep.Location = New-Object System.Drawing.Point(10, 360); $btnKeep.Size = New-Object System.Drawing.Size(220, 40); $form.Controls.Add($btnKeep)
+            $btnRemove = New-Object System.Windows.Forms.Button; $btnRemove.Text = "Skip All (Secure)"; $btnRemove.DialogResult = [System.Windows.Forms.DialogResult]::No; $btnRemove.Location = New-Object System.Drawing.Point(250, 360); $btnRemove.Size = New-Object System.Drawing.Size(220, 40); $form.Controls.Add($btnRemove)
 
             $result = $form.ShowDialog()
 
-            if ($result -eq 'Yes') { # Keep All
-                Write-Log -Message "User chose to KEEP all high-privilege group memberships." -Level WARN
-                $RestrictedGroups = @() # Empty the list
-            }
-            elseif ($result -eq 'No') { # Remove All
-                Write-Log -Message "User chose to REMOVE all high-privilege group memberships (Default)." -Level INFO
-                # $RestrictedGroups is already set to the default, so do nothing.
-            }
-            elseif ($result -eq 'Retry') { # Customize
-                $customForm = New-Object System.Windows.Forms.Form; $customForm.Text = "Customize Privileges"; $customForm.Size = New-Object System.Drawing.Size(400, 450); $customForm.StartPosition = "CenterScreen"
-                $customLabel = New-Object System.Windows.Forms.Label; $customLabel.Text = "Check the groups whose memberships you want to KEEP in the export."; $customLabel.Location = New-Object System.Drawing.Point(10, 10); $customLabel.Size = New-Object System.Drawing.Size(360, 30); $customForm.Controls.Add($customLabel)
-                $checkedListBox = New-Object System.Windows.Forms.CheckedListBox; $checkedListBox.Location = New-Object System.Drawing.Point(10, 45); $checkedListBox.Size = New-Object System.Drawing.Size(360, 300); $customForm.Controls.Add($checkedListBox)
-                $FoundPrivilegedGroups | ForEach-Object { [void]$checkedListBox.Items.Add($_, $false) }
-                $btnOk = New-Object System.Windows.Forms.Button; $btnOk.Text = "OK"; $btnOk.DialogResult = [System.Windows.Forms.DialogResult]::OK; $btnOk.Location = New-Object System.Drawing.Point(290, 360); $customForm.Controls.Add($btnOk); $customForm.AcceptButton = $btnOk
-
-                if ($customForm.ShowDialog() -eq 'OK') {
-                    $keptGroups = $checkedListBox.CheckedItems
-                    $RestrictedGroups = $FoundPrivilegedGroups | Where-Object { $_ -notin $keptGroups }
-                    Write-Log -Message "User customized privilege removal. Groups to be skipped: $($RestrictedGroups -join ', ')" -Level INFO
-                } else {
-                    Write-Log -Message "User cancelled customization. Defaulting to REMOVE all high-privilege group memberships." -Level INFO
-                }
+            if ($result -eq 'Yes') { # Export Selected
+                foreach ($gNode in $treeView.Nodes) {
+                     $gName = $gNode.Text
+                     $gObj = $PrivilegedGroupData[$gName].GroupObject
+                     
+                     foreach ($mNode in $gNode.Nodes) {
+                         if ($mNode.Checked) {
+                             $mem = $mNode.Tag
+                             $KeptPrivilegedMemberships += [PSCustomObject]@{
+                                GroupSam   = $gObj.SamAccountName
+                                MemberSam  = $mem.SamAccountName
+                                MemberType = $mem.objectClass
+                             }
+                         }
+                     }
+                 }
+                 Write-Log -Message "User selected specific high-privilege memberships to keep." -Level WARN
+            } else {
+                Write-Log -Message "User chose to REMOVE all high-privilege group memberships." -Level INFO
             }
         }
 
@@ -241,6 +282,10 @@ try {
         Write-Log -Message "Exporting group memberships..." -Level INFO
         
         $Memberships = @()
+        
+        # Add the kept privileged ones first
+        $Memberships += $KeptPrivilegedMemberships
+        
         foreach ($grp in $Groups) {
             if ($grp.Name -in $RestrictedGroups) {
                 Write-Log -Message "Skipping membership export for restricted/default group: $($grp.Name)" -Level INFO

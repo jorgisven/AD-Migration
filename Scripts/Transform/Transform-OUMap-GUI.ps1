@@ -223,7 +223,7 @@ $result = [System.Windows.Forms.MessageBox]::Show($msg, "Load Target Structure",
 if ($result -eq 'Yes') {
     try {
         # The -Server parameter requires an FQDN (e.g., target.local), not a DN (e.g., DC=target,DC=local). Convert it.
-        $TargetServer = ($TargetDomain -replace 'DC=','' -split '(?<!\\),' | Join-Object -Separator '.')
+        $TargetServer = (($TargetDomain -replace 'DC=','' -split '(?<!\\),') -join '.')
         Write-Host "Attempting to connect to server '$TargetServer' to load existing OUs..." -ForegroundColor Yellow
         $TargetOUs = Get-ADOrganizationalUnit -Filter * -Server $TargetServer -Properties Description | Sort-Object { $_.DistinguishedName.Length }
         Write-Host "Found $($TargetOUs.Count) existing OUs in target domain." -ForegroundColor Green

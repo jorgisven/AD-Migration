@@ -154,5 +154,15 @@ $btnImport.Add_Click({
 })
 
 
+# --- Context-Aware Logic ---
+# Check if running from an extracted package (i.e., Export folder exists at the root)
+$exportDataPath = Join-Path $ScriptDir "Export"
+if ((Test-Path $exportDataPath) -and (Get-ChildItem -Path $exportDataPath -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+    # Export phase appears complete, but allow re-run if user is still on source domain.
+    $btnExport.Text = "1. Export from Source Domain (Re-run)"
+    $lblExport.Text = "Export data found. Click to re-run if needed, or proceed to Transform."
+    $btnTransform.Focus()
+}
+
 # --- Show Form ---
 $form.ShowDialog() | Out-Null
