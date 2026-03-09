@@ -65,10 +65,11 @@ NEXT STEPS:
 2. Extract the archive.
 
 IF ANALYZING (Analyst Workstation):
-   - Run all scripts in 'Scripts\Transform\' to generate mapping files.
+   - Run the interactive transform wizard (No Admin required):
+     Scripts\Transform\Run-AllTransforms.ps1
 
 IF IMPORTING (Target Domain):
-   - Run the following scripts in this order:
+   - Run the following scripts AS ADMINISTRATOR in this order:
      1. Scripts\Import\Import-OUs.ps1
      2. Scripts\Import\Import-GPOs.ps1
      3. Scripts\Import\Import-WMIFilters.ps1

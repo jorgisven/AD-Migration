@@ -41,7 +41,8 @@ AD-Migration/
 |   |   |-- Validation-Exports.ps1
 |   |   |-- Validation-OUMap.ps1
 |   |   |-- Validation-AccountPlacement.ps1
-|   |   `-- Validation-GPOApplication.ps1
+|   |   |-- Validation-GPOApplication.ps1
+|   |   `-- Run-AllTransforms.ps1
 |   |
 |   |-- Import/                 # Import phase scripts
 |   |   |-- Import-OUs.ps1

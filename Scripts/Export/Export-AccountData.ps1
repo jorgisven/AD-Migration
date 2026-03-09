@@ -219,13 +219,14 @@ try {
             }
             elseif ($result -eq 'Retry') { # Customize
                 $customForm = New-Object System.Windows.Forms.Form; $customForm.Text = "Customize Privileges"; $customForm.Size = New-Object System.Drawing.Size(400, 450); $customForm.StartPosition = "CenterScreen"
-                $customLabel = New-Object System.Windows.Forms.Label; $customLabel.Text = "Check the groups whose memberships you want to REMOVE from the export."; $customLabel.Location = New-Object System.Drawing.Point(10, 10); $customLabel.Size = New-Object System.Drawing.Size(360, 30); $customForm.Controls.Add($customLabel)
+                $customLabel = New-Object System.Windows.Forms.Label; $customLabel.Text = "Check the groups whose memberships you want to KEEP in the export."; $customLabel.Location = New-Object System.Drawing.Point(10, 10); $customLabel.Size = New-Object System.Drawing.Size(360, 30); $customForm.Controls.Add($customLabel)
                 $checkedListBox = New-Object System.Windows.Forms.CheckedListBox; $checkedListBox.Location = New-Object System.Drawing.Point(10, 45); $checkedListBox.Size = New-Object System.Drawing.Size(360, 300); $customForm.Controls.Add($checkedListBox)
-                $FoundPrivilegedGroups | ForEach-Object { [void]$checkedListBox.Items.Add($_, $true) }
+                $FoundPrivilegedGroups | ForEach-Object { [void]$checkedListBox.Items.Add($_, $false) }
                 $btnOk = New-Object System.Windows.Forms.Button; $btnOk.Text = "OK"; $btnOk.DialogResult = [System.Windows.Forms.DialogResult]::OK; $btnOk.Location = New-Object System.Drawing.Point(290, 360); $customForm.Controls.Add($btnOk); $customForm.AcceptButton = $btnOk
 
                 if ($customForm.ShowDialog() -eq 'OK') {
-                    $RestrictedGroups = $checkedListBox.CheckedItems
+                    $keptGroups = $checkedListBox.CheckedItems
+                    $RestrictedGroups = $FoundPrivilegedGroups | Where-Object { $_ -notin $keptGroups }
                     Write-Log -Message "User customized privilege removal. Groups to be skipped: $($RestrictedGroups -join ', ')" -Level INFO
                 } else {
                     Write-Log -Message "User cancelled customization. Defaulting to REMOVE all high-privilege group memberships." -Level INFO
@@ -293,5 +294,5 @@ Total Objects: $($Users.Count + $ServiceAccounts.Count + $Computers.Count + $Gro
     
 } catch {
     Write-Log -Message "Failed to export account data: $_" -Level ERROR
-    Write-Host "Account data export failed. Check logs for details."
+    throw "Account data export failed. Check logs for details."
 }

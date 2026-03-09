@@ -89,5 +89,5 @@ try {
     
 } catch {
     Write-Log -Message "Failed to export WMI filters: $_" -Level ERROR
-    Write-Host "WMI filter export failed. Check logs for details."
+    throw "WMI filter export failed. Check logs for details."
 }

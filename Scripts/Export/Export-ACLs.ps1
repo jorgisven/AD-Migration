@@ -36,46 +36,51 @@ $csvPath = Join-Path $ExportPath "ACLs_OUs_$timestamp.csv"
 
 Write-Log -Message "Starting ACL Export for $SourceDomain..." -Level INFO
 
-Invoke-Safely -ScriptBlock {
-    # Ensure AD Drive is mounted for Get-Acl
-    if (-not (Get-PSDrive -Name AD -ErrorAction SilentlyContinue)) {
-        New-PSDrive -Name AD -PSProvider ActiveDirectory -Root "" -Server $SourceDomain | Out-Null
-    }
-
-    $OUs = Get-ADOrganizationalUnit -Filter * -Server $SourceDomain
-    Write-Log -Message "Found $($OUs.Count) OUs to scan." -Level INFO
-
-    $ACLData = [System.Collections.Generic.List[PSObject]]::new()
-    $count = 0
-    $total = $OUs.Count
-
-    foreach ($ou in $OUs) {
-        $count++
-        if ($count % 10 -eq 0) { Write-Progress -Activity "Exporting ACLs" -Status "Processing OU $count of $total" -PercentComplete (($count / $total) * 100) }
-
-        try {
-            # Get-Acl requires the AD drive path
-            $acl = Get-Acl -Path "AD:\$($ou.DistinguishedName)" -ErrorAction Stop
-            
-            foreach ($access in $acl.Access) {
-                $ACLData.Add([PSCustomObject]@{
-                    DistinguishedName     = $ou.DistinguishedName
-                    IdentityReference     = "$($access.IdentityReference)"
-                    ActiveDirectoryRights = $access.ActiveDirectoryRights.ToString()
-                    AccessControlType     = $access.AccessControlType.ToString()
-                    IsInherited           = $access.IsInherited
-                    InheritanceFlags      = $access.InheritanceFlags.ToString()
-                    PropagationFlags      = $access.PropagationFlags.ToString()
-                })
-            }
-        } catch {
-            Write-Log -Message "Failed to get ACL for $($ou.DistinguishedName): $_" -Level WARN
+try {
+    Invoke-Safely -ScriptBlock {
+        # Ensure AD Drive is mounted for Get-Acl
+        if (-not (Get-PSDrive -Name AD -ErrorAction SilentlyContinue)) {
+            New-PSDrive -Name AD -PSProvider ActiveDirectory -Root "" -Server $SourceDomain | Out-Null
         }
-    }
 
-    $ACLData | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
-    Write-Log -Message "Exported $($ACLData.Count) ACEs to $csvPath" -Level INFO
+        $OUs = Get-ADOrganizationalUnit -Filter * -Server $SourceDomain
+        Write-Log -Message "Found $($OUs.Count) OUs to scan." -Level INFO
 
-} -Operation "Export OU ACLs"
+        $ACLData = [System.Collections.Generic.List[PSObject]]::new()
+        $count = 0
+        $total = $OUs.Count
 
-Write-Host "✅ ACL Export Complete: $csvPath" -ForegroundColor Green
+        foreach ($ou in $OUs) {
+            $count++
+            if ($count % 10 -eq 0) { Write-Progress -Activity "Exporting ACLs" -Status "Processing OU $count of $total" -PercentComplete (($count / $total) * 100) }
+
+            try {
+                # Get-Acl requires the AD drive path
+                $acl = Get-Acl -Path "AD:\$($ou.DistinguishedName)" -ErrorAction Stop
+                
+                foreach ($access in $acl.Access) {
+                    $ACLData.Add([PSCustomObject]@{
+                        DistinguishedName     = $ou.DistinguishedName
+                        IdentityReference     = "$($access.IdentityReference)"
+                        ActiveDirectoryRights = $access.ActiveDirectoryRights.ToString()
+                        AccessControlType     = $access.AccessControlType.ToString()
+                        IsInherited           = $access.IsInherited
+                        InheritanceFlags      = $access.InheritanceFlags.ToString()
+                        PropagationFlags      = $access.PropagationFlags.ToString()
+                    })
+                }
+            } catch {
+                Write-Log -Message "Failed to get ACL for $($ou.DistinguishedName): $_" -Level WARN
+            }
+        }
+
+        $ACLData | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+        Write-Log -Message "Exported $($ACLData.Count) ACEs to $csvPath" -Level INFO
+
+    } -Operation "Export OU ACLs"
+
+    Write-Host "✅ ACL Export Complete: $csvPath" -ForegroundColor Green
+} catch {
+    Write-Log -Message "Failed to export ACLs: $_" -Level ERROR
+    throw "ACL export failed. Check logs."
+}

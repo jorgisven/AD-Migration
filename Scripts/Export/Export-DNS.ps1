@@ -9,7 +9,10 @@
 
 param(
     [Parameter(Mandatory = $false)]
-    [string]$SourceDomain
+    [string]$SourceDomain,
+
+    [Parameter(Mandatory = $false)]
+    [string]$DnsServer
 )
 
 # Import module and config
@@ -51,15 +54,60 @@ if (-not $SourceDomain) {
 
 Write-Log -Message "Starting DNS export from: $SourceDomain" -Level INFO
 
+# Check environment context
+$isElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$isDC = (Get-CimInstance Win32_OperatingSystem).ProductType -eq 2
+
+if ($isDC -and -not $isElevated) {
+    $elevMsg = "You are running on a Domain Controller without Administrator privileges.`n`nDNS export requires elevation to access local zones.`n`nPlease restart PowerShell as Administrator."
+    $elevResult = [System.Windows.Forms.MessageBox]::Show($elevMsg, "Elevation Required", [System.Windows.Forms.MessageBoxButtons]::AbortRetryIgnore, [System.Windows.Forms.MessageBoxIcon]::Error)
+    if ($elevResult -eq 'Abort') {
+        Write-Host "Exiting per user request. Please run as Administrator." -ForegroundColor Red
+        exit
+    }
+    Write-Log -Message "User chose to ignore elevation warning on DC." -Level WARN
+} elseif (-not $isElevated) {
+    Write-Log -Message "Script is not running as Administrator. Local DNS operations may fail." -Level WARN
+}
+
 try {
     Invoke-Safely -ScriptBlock {
         # Find a DC to query DNS (Preferably the PDC or a reliable DC)
         $DC = Get-ADDomainController -DomainName $SourceDomain -Discover
         $TargetDC = $DC.HostName
-        Write-Log -Message "Querying DNS Server: $TargetDC" -Level INFO
+        # Determine Target DNS Server
+        if ($DnsServer) {
+            $TargetDC = $DnsServer
+        } else {
+            # Prefer PDC as it is most likely to be writable and authoritative
+            try {
+                $DC = Get-ADDomainController -DomainName $SourceDomain -Discover -Service PrimaryDC -ErrorAction Stop
+            } catch {
+                Write-Log -Message "Could not find PDC, falling back to any available DC." -Level WARN
+                $DC = Get-ADDomainController -DomainName $SourceDomain -Discover
+            }
+            $TargetDC = $DC.HostName
+        }
+
+        # Check if running locally to avoid RPC loopback issues
+        if ($TargetDC -and ($env:COMPUTERNAME -eq ($TargetDC -split '\.')[0])) {
+             Write-Log -Message "Running on the target DC ($TargetDC). Switching to local mode." -Level INFO
+             $TargetDC = $null
+        }
+
+        Write-Log -Message "Querying DNS Server: $(if ($TargetDC) { $TargetDC } else { 'Localhost' })" -Level INFO
 
         # Get Zones
-        $Zones = Get-DnsServerZone -ComputerName $TargetDC
+        try {
+            $zoneParams = @{ ErrorAction = 'Stop' }
+            if ($TargetDC) { $zoneParams['ComputerName'] = $TargetDC }
+            $Zones = Get-DnsServerZone @zoneParams
+        } catch {
+            Write-Log -Message "RPC query to $TargetDC failed. Attempting local DNS query..." -Level WARN
+            # Fallback to local query (omitting ComputerName)
+            $Zones = Get-DnsServerZone -ErrorAction Stop
+            $TargetDC = $null # Switch to local mode for records
+        }
         
         $ZoneList = @()
         $AllRecords = @()
@@ -75,7 +123,10 @@ try {
 
             # Export Records for this zone
             try {
-                $Records = Get-DnsServerResourceRecord -ZoneName $ZoneName -ComputerName $TargetDC -ErrorAction Stop
+                $dnsParams = @{ ZoneName = $ZoneName; ErrorAction = 'Stop' }
+                if ($TargetDC) { $dnsParams['ComputerName'] = $TargetDC }
+                $Records = Get-DnsServerResourceRecord @dnsParams
+
                 foreach ($Rec in $Records) {
                     # Stale Record Filter (Pre-Export)
                     if ($FilterStale -and $Rec.Timestamp) {
@@ -114,5 +165,5 @@ try {
     
 } catch {
     Write-Log -Message "DNS Export Failed: $_" -Level ERROR
-    Write-Host "DNS export failed. Check logs."
+    throw "DNS export failed. Check logs."
 }

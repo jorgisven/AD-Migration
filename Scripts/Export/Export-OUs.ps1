@@ -64,7 +64,7 @@ try {
 
         foreach ($ou in $OUs) {
             # Check if OU has any children (OneLevel search, stop at 1 result for speed)
-            $hasChildren = Get-ADObject -SearchBase $ou.DistinguishedName -SearchScope OneLevel -ResultSetSize 1 -Server $SourceDomain
+            $hasChildren = Get-ADObject -Filter * -SearchBase $ou.DistinguishedName -SearchScope OneLevel -ResultSetSize 1 -Server $SourceDomain
             if (-not $hasChildren) {
                 if (-not [string]::IsNullOrEmpty($ou.gPLink)) {
                     $EmptyLinkedOUs += $ou.DistinguishedName
@@ -124,5 +124,5 @@ try {
     
 } catch {
     Write-Log -Message "Failed to export OUs: $_" -Level ERROR
-    Write-Host "OU export failed. Check logs for details."
+    throw "OU export failed. Check logs for details."
 }

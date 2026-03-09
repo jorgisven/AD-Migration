@@ -32,6 +32,18 @@ $OUMap = @{}
 Import-Csv $mapFiles[0].FullName | ForEach-Object { $OUMap[$_.SourceDN] = $_.TargetDN }
 Write-Log -Message "Loaded OU Map with $($OUMap.Count) entries" -Level INFO
 
+# 1.5 Load Identity Map (for Security Filtering)
+$IdentityMap = @{}
+$idMapFile = Join-Path $MapPath "Identity_Map_Final.csv"
+if (Test-Path $idMapFile) {
+    Import-Csv $idMapFile | ForEach-Object {
+        if (-not [string]::IsNullOrWhiteSpace($_.SourceSam)) {
+            $IdentityMap[$_.SourceSam] = $_.TargetSam
+        }
+    }
+    Write-Log -Message "Loaded Identity Map with $($IdentityMap.Count) entries for Security Filtering." -Level INFO
+}
+
 # 2. Load GPO XML Reports (Export Data)
 $xmlFiles = Get-ChildItem -Path $ReportPath -Filter "*.xml"
 if (-not $xmlFiles) { throw "Missing GPO Reports (Run Export-GPOReports.ps1)" }
@@ -113,15 +125,31 @@ Invoke-Safely -ScriptBlock {
                         continue
                     }
 
+                    # Resolve Target Identity
+                    $sam = $trusteeName
+                    if ($trusteeName -match "\\") {
+                        $sam = ($trusteeName -split "\\")[1]
+                    }
+
+                    $targetTrustee = $sam
+                    if ($IdentityMap.ContainsKey($sam)) {
+                        $targetTrustee = $IdentityMap[$sam]
+                    }
+
                     try {
                         Write-Log -Message "Applying GpoApply security filter for '$trusteeName' on GPO '$gpoName'" -Level INFO
                         if ($PSCmdlet.ShouldProcess($gpoName, "Set GPPermission '$trusteeName'")) {
                             Set-GPPermission -Name $gpoName -PermissionLevel GpoApply -TargetName $trusteeName -TargetType $trusteeType -Server $TargetDomain -ErrorAction Stop
+                        }
+                        Write-Log -Message "Applying GpoApply security filter for '$targetTrustee' (Source: $trusteeName) on GPO '$gpoName'" -Level INFO
+                        if ($PSCmdlet.ShouldProcess($gpoName, "Set GPPermission '$targetTrustee'")) {
+                            Set-GPPermission -Name $gpoName -PermissionLevel GpoApply -TargetName $targetTrustee -TargetType $trusteeType -Server $TargetDomain -ErrorAction Stop
                             $customFiltersApplied = $true
                         }
                     }
                     catch {
                         Write-Log -Message "Failed to set GpoApply for '$trusteeName' on GPO '$gpoName'. Principal may not exist in target domain. Details: $_" -Level WARN
+                        Write-Log -Message "Failed to set GpoApply for '$targetTrustee' on GPO '$gpoName'. Principal may not exist in target domain. Details: $_" -Level WARN
                     }
                 }
             }

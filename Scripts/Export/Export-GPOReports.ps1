@@ -143,5 +143,5 @@ try {
     
 } catch {
     Write-Log -Message "Failed to export GPO reports: $_" -Level ERROR
-    Write-Host "GPO report export failed. Check logs for details."
+    throw "GPO report export failed. Check logs for details."
 }
