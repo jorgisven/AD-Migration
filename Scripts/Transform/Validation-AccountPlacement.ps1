@@ -8,6 +8,9 @@
 
 # Import module and config
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName Microsoft.VisualBasic
 $ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) 'Scripts') 'ADMigration\ADMigration.psd1'
 if (-not (Test-Path $ModulePath)) { throw "Module manifest missing." }
 Import-Module $ModulePath -Force
@@ -26,7 +29,8 @@ $hasErrors = $false
 if (-not (Test-Path $ouMapFile)) {
     throw "OU Map file not found at '$ouMapFile'. Cannot validate account placement."
 }
-$validOUs = Import-Csv $ouMapFile | Where-Object { $_.Action -ne 'Skip' } | Select-Object -ExpandProperty TargetDN
+$ouMapData = Import-Csv $ouMapFile
+$validOUs = $ouMapData | Where-Object { $_.Action -ne 'Skip' } | Select-Object -ExpandProperty TargetDN
 $validOUSet = [System.Collections.Generic.HashSet[string]]::new($validOUs, [System.StringComparer]::OrdinalIgnoreCase)
 # Also add the domain root as a valid placement target
 $domainDN = ($validOUs | Select-Object -First 1) -replace '.*?(DC=.*)', '$1'
@@ -72,6 +76,45 @@ if (Test-Path $computerMapFile) {
     }
 } else {
     Write-Host "[!] WARNING: Computer account map not found at '$computerMapFile'. Skipping validation." -ForegroundColor Yellow
+}
+
+# 4. Optional Live Target Validation
+$msg = "Do you want to connect to the live target domain to verify your account destination OUs?`n`nThis ensures the OUs you are placing accounts into actually exist in the target AD environment.`n(Requires network line-of-sight to the Target Domain)."
+$onlineResult = [System.Windows.Forms.MessageBox]::Show($msg, "Live Target Validation", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+
+if ($onlineResult -eq 'Yes') {
+    $TargetDomain = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the FQDN of the TARGET domain (e.g., target.local):", "Live Validation", "")
+    if (-not [string]::IsNullOrWhiteSpace($TargetDomain)) {
+        Write-Host "`n--- Performing Live Target Validation against '$TargetDomain' ---" -ForegroundColor Cyan
+        
+        $targetOUsToCheck = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        if (Test-Path $userMapFile) { foreach ($u in $userMap) { if ($u.Action -eq 'Create' -and $u.TargetOU_DN) { $targetOUsToCheck.Add($u.TargetOU_DN) | Out-Null } } }
+        if (Test-Path $computerMapFile) { foreach ($c in $computerMap) { if ($c.Action -eq 'Create' -and $c.TargetOU_DN) { $targetOUsToCheck.Add($c.TargetOU_DN) | Out-Null } } }
+
+        foreach ($ou in $targetOUsToCheck) {
+            try {
+                $null = Get-ADObject -Identity $ou -Server $TargetDomain -ErrorAction Stop
+                Write-Host "[+] PASSED: Destination OU exists in target: $ou" -ForegroundColor Green
+            } catch {
+                # Check if this OU is planned for creation in the map
+                $mapRow = $ouMapData | Where-Object { $_.TargetDN -eq $ou } | Select-Object -First 1
+                
+                if ($mapRow -and $mapRow.SourceDN -ne 'PRE-EXISTING') {
+                    # It's normal for it not to exist yet, because Import-OUs hasn't run.
+                    Write-Host "[~] PENDING: Destination OU does not exist yet (Will be created during Import): $ou" -ForegroundColor DarkGray
+                } elseif ($ou -eq $domainDN) {
+                    Write-Host "[-] ERROR: Domain root does not exist or is unreachable: $ou" -ForegroundColor Red
+                    $hasErrors = $true
+                } else {
+                    Write-Host "[-] ERROR: Destination OU does not exist in target domain: $ou" -ForegroundColor Red
+                    Write-Host "    Details: $($_.Exception.Message)" -ForegroundColor Red
+                    $hasErrors = $true
+                }
+            }
+        }
+    } else {
+        Write-Host "[-] Live validation skipped (no domain provided)." -ForegroundColor Yellow
+    }
 }
 
 Write-Host ""

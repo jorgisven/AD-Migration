@@ -57,10 +57,66 @@ if (Test-Path $PortableExport) {
 function Show-ManualActionPrompt {
     param(
         [string]$Title,
-        [string]$Message
+        [string]$Message,
+        [string]$ToolPath = $null,
+        [string]$ToolButtonText = "Launch Tool"
     )
-    $result = [System.Windows.Forms.MessageBox]::Show($Message, $Title, [System.Windows.Forms.MessageBoxButtons]::OKCancel, [System.Windows.Forms.MessageBoxIcon]::Warning)
-    if ($result -eq 'Cancel') {
+    
+    if (-not $ToolPath) {
+        $result = [System.Windows.Forms.MessageBox]::Show($Message, $Title, [System.Windows.Forms.MessageBoxButtons]::OKCancel, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        if ($result -eq 'Cancel') {
+            Write-Host "Transform process cancelled by user." -ForegroundColor Yellow
+            throw "User cancelled operation."
+        }
+        return
+    }
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = $Title
+    $form.Size = New-Object System.Drawing.Size(480, 260)
+    $form.StartPosition = "CenterScreen"
+    $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+
+    $lblMessage = New-Object System.Windows.Forms.Label
+    $lblMessage.Text = $Message
+    $lblMessage.Location = New-Object System.Drawing.Point(20, 20)
+    $lblMessage.Size = New-Object System.Drawing.Size(420, 100)
+    $form.Controls.Add($lblMessage)
+
+    $btnLaunch = New-Object System.Windows.Forms.Button
+    $btnLaunch.Text = $ToolButtonText
+    $btnLaunch.Location = New-Object System.Drawing.Point(20, 130)
+    $btnLaunch.Size = New-Object System.Drawing.Size(150, 30)
+    $btnLaunch.Add_Click({
+        if (Test-Path $ToolPath) {
+            Start-Process powershell.exe -ArgumentList "-Command", "& '$ToolPath'"
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("Script not found at: $ToolPath", "Error", "OK", "Error")
+        }
+    })
+    $form.Controls.Add($btnLaunch)
+
+    $btnOK = New-Object System.Windows.Forms.Button
+    $btnOK.Text = "OK (Done)"
+    $btnOK.Location = New-Object System.Drawing.Point(220, 170)
+    $btnOK.Size = New-Object System.Drawing.Size(100, 30)
+    $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.Controls.Add($btnOK)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = "Cancel"
+    $btnCancel.Location = New-Object System.Drawing.Point(340, 170)
+    $btnCancel.Size = New-Object System.Drawing.Size(100, 30)
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $form.Controls.Add($btnCancel)
+
+    $form.AcceptButton = $btnOK
+    $form.CancelButton = $btnCancel
+
+    $result = $form.ShowDialog()
+    if ($result -eq [System.Windows.Forms.DialogResult]::Cancel) {
         Write-Host "Transform process cancelled by user." -ForegroundColor Yellow
         throw "User cancelled operation."
     }
@@ -92,7 +148,8 @@ try {
     # 2. OU Mapping
     Write-Host "`n--- Step 2: OU Mapping ---" -ForegroundColor Yellow
     Invoke-TransformStep -ScriptName "Transform-OUMap.ps1"
-    Show-ManualActionPrompt -Title "Manual Action: Edit OU Map" -Message "The script has created 'OU_Map_Draft.csv'.`n`nPlease edit this file to define your target OU structure. You can use the GUI mapper (`Transform-OUMap-GUI.ps1`) for this.`n`nClick OK when you have finished editing and saved the file."
+    $guiMapperPath = Join-Path $ScriptRoot "Transform-OUMap-GUI.ps1"
+    Show-ManualActionPrompt -Title "Manual Action: Edit OU Map" -Message "The script has created 'OU_Map_Draft.csv'.`n`nPlease edit this file to define your target OU structure. You can use the GUI mapper (`.\Scripts\Transform\Transform-OUMap-GUI.ps1`) for this.`n`nClick OK when you have finished editing and saved the file." -ToolPath $guiMapperPath -ToolButtonText "Launch GUI Mapper"
     Invoke-TransformStep -ScriptName "Validation-OUMap.ps1"
     Show-ManualActionPrompt -Title "OU Map Validated" -Message "OU Map validation complete. Check the output above for any errors.`n`nClick OK to proceed to Account Mapping."
 

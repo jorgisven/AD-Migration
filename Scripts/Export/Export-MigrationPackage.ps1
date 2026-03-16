@@ -33,23 +33,45 @@ try {
     $TempDir = Join-Path $env:TEMP "ADMigration_Staging_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
     New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 
-    # 1. Copy Export Data
+    # 1. Copy Start-MigrationGUI.ps1 to the root of the staging area
+    $GuiScriptPath = Join-Path $RepoRoot "Start-MigrationGUI.ps1"
+    if (Test-Path $GuiScriptPath) {
+        Write-Log -Message "Copying Start-MigrationGUI.ps1..." -Level INFO
+        Copy-Item -Path $GuiScriptPath -Destination $TempDir
+    } else {
+        Write-Log -Message "Start-MigrationGUI.ps1 not found at $GuiScriptPath. It will be missing from the package." -Level WARN
+    }
+
+    # 2. Copy Export Data
     Write-Log -Message "Copying Export data from $ExportRoot..." -Level INFO
     Copy-Item -Path $ExportRoot -Destination $TempDir -Recurse -Container
 
-    # 2. Copy Transform Data (If available)
+    # 3. Copy Transform Data (If available)
     if (Test-Path $TransformRoot) {
         Write-Log -Message "Copying Transform data from $TransformRoot..." -Level INFO
         Copy-Item -Path $TransformRoot -Destination $TempDir -Recurse -Container
     }
 
-    # 3. Copy Scripts (So you can run Import on the other side)
+    # 4. Copy Scripts (So you can run Import on the other side)
     $StageScripts = Join-Path $TempDir "Scripts"
     $SourceScripts = Join-Path $RepoRoot "Scripts"
     Write-Log -Message "Copying Scripts from $SourceScripts..." -Level INFO
     Copy-Item -Path $SourceScripts -Destination $StageScripts -Recurse -Container
 
-    # 4. Zip it up
+    # 5. Copy Documentation
+    $DocsDir = Join-Path $RepoRoot "Docs"
+    if (Test-Path $DocsDir) {
+        Write-Log -Message "Copying Documentation from $DocsDir..." -Level INFO
+        Copy-Item -Path $DocsDir -Destination $TempDir -Recurse -Container
+    }
+    
+    $RootMdFiles = Get-ChildItem -Path $RepoRoot -Filter "*.md" -File
+    if ($RootMdFiles) {
+        Write-Log -Message "Copying root markdown files..." -Level INFO
+        $RootMdFiles | Copy-Item -Destination $TempDir
+    }
+
+    # 6. Zip it up
     Write-Log -Message "Compressing package to $ZipPath..." -Level INFO
     Compress-Archive -Path "$TempDir\*" -DestinationPath $ZipPath
 

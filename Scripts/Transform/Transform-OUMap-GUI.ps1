@@ -47,6 +47,12 @@ if (-not $latestExport) {
 
 $SourceOUs = Import-Csv $latestExport.FullName | Sort-Object { $_.DistinguishedName.Length }
 
+$EmptyOUs = @()
+$emptyListFile = Join-Path $SourceOUPath "EmptyOUs.txt"
+if (Test-Path $emptyListFile) {
+    $EmptyOUs = @(Get-Content $emptyListFile)
+}
+
 # --- GUI SETUP ---
 
 $form = New-Object System.Windows.Forms.Form
@@ -80,6 +86,7 @@ $treeSource = New-Object System.Windows.Forms.TreeView
 $treeSource.Dock = "Fill"
 $treeSource.AllowDrop = $false # Source is drag source only
 $splitContainer.Panel1.Controls.Add($treeSource)
+$treeSource.BringToFront()
 
 # Right Pane (Target)
 $lblTarget = New-Object System.Windows.Forms.Label
@@ -102,6 +109,7 @@ $treeTarget.Dock = "Fill"
 $treeTarget.AllowDrop = $true
 $treeTarget.LabelEdit = $true # Allow renaming
 $splitContainer.Panel2.Controls.Add($treeTarget)
+$treeTarget.BringToFront()
 
 # Bottom Panel (Buttons)
 $panelBottom = New-Object System.Windows.Forms.Panel
@@ -115,6 +123,13 @@ $btnSave.Width = 150
 $btnSave.Location = New-Object System.Drawing.Point(820, 10)
 $panelBottom.Controls.Add($btnSave)
 
+$btnUndo = New-Object System.Windows.Forms.Button
+$btnUndo.Text = "Undo"
+$btnUndo.Width = 80
+$btnUndo.Location = New-Object System.Drawing.Point(730, 10)
+$btnUndo.Enabled = $false
+$panelBottom.Controls.Add($btnUndo)
+
 $lblInfo = New-Object System.Windows.Forms.Label
 $lblInfo.Text = "Drag OUs from Left to Right. Right-click Target nodes to Rename/Delete."
 $lblInfo.AutoSize = $true
@@ -122,6 +137,77 @@ $lblInfo.Location = New-Object System.Drawing.Point(10, 15)
 $panelBottom.Controls.Add($lblInfo)
 
 # --- FUNCTIONS ---
+
+# State Management for Undo/Copy
+$script:UndoStack = New-Object System.Collections.Generic.List[object]
+$script:MaxUndo = 20
+$script:ClipboardNode = $null
+
+function Save-TreeState {
+    $snapshot = @()
+    foreach ($n in $treeTarget.Nodes) {
+        $snapshot += $n.Clone()
+    }
+    $script:UndoStack.Add($snapshot)
+    if ($script:UndoStack.Count -gt $script:MaxUndo) {
+        $script:UndoStack.RemoveAt(0)
+    }
+    $btnUndo.Enabled = $true
+}
+
+function Undo-Action {
+    if ($script:UndoStack.Count -gt 0) {
+        $lastIndex = $script:UndoStack.Count - 1
+        $snapshot = $script:UndoStack[$lastIndex]
+        $script:UndoStack.RemoveAt($lastIndex)
+        
+        $treeTarget.BeginUpdate()
+        $treeTarget.Nodes.Clear()
+        foreach ($n in $snapshot) {
+            $treeTarget.Nodes.Add($n) | Out-Null
+        }
+        $treeTarget.ExpandAll()
+        $treeTarget.EndUpdate()
+        
+        $btnUndo.Enabled = ($script:UndoStack.Count -gt 0)
+    }
+}
+
+function Copy-Action {
+    if ($treeTarget.SelectedNode) {
+        $script:ClipboardNode = $treeTarget.SelectedNode.Clone()
+    }
+}
+
+function Paste-Action {
+    if ($script:ClipboardNode -and $treeTarget.SelectedNode) {
+        $targetNode = $treeTarget.SelectedNode
+        $existing = $targetNode.Nodes | Where-Object { $_.Text -eq $script:ClipboardNode.Text }
+        if ($existing) {
+            [System.Windows.Forms.MessageBox]::Show("An OU with the name '$($script:ClipboardNode.Text)' already exists under '$($targetNode.Text)'.", "Conflict", "OK", "Warning")
+            return
+        }
+        Save-TreeState
+        $targetNode.Nodes.Add($script:ClipboardNode.Clone()) | Out-Null
+        $targetNode.Expand()
+    }
+}
+
+function Delete-Action {
+    $node = $treeTarget.SelectedNode
+    if ($node) {
+        if ($null -eq $node.Parent) {
+            [System.Windows.Forms.MessageBox]::Show("You cannot delete the root domain node.", "Action Denied", "OK", "Warning")
+            return
+        }
+        if ($node.Tag -and $node.Tag.SourceDN -eq 'PRE-EXISTING') {
+            [System.Windows.Forms.MessageBox]::Show("This OU already exists in the live target domain and serves as an anchor point for your migration.`n`nIt cannot be removed from the mapping view.", "Cannot Delete Pre-Existing OU", "OK", "Warning")
+            return
+        }
+        Save-TreeState
+        $node.Remove()
+    }
+}
 
 function Add-NodeToTree ($tree, $dn, $tagData) {
     # Parse DN to find hierarchy
@@ -199,6 +285,8 @@ function Search-Tree ($tree, $text) {
     $tree.EndUpdate()
 }
 
+$btnUndo.Add_Click({ Undo-Action })
+
 # Populate Source Tree
 $treeSource.BeginUpdate()
 foreach ($ou in $SourceOUs) {
@@ -256,7 +344,7 @@ if (Test-Path $draftFile) {
     Write-Host "Loading existing draft file: $draftFile" -ForegroundColor Cyan
     $Draft = Import-Csv $draftFile
     foreach ($row in $Draft) {
-        if ($row.Action -ne 'Skip') {
+        if ($row.Action -ne 'Skip' -and -not [string]::IsNullOrWhiteSpace($row.TargetDN)) {
             $tag = @{
                 SourceDN    = $row.SourceDN
                 Description = $row.Description
@@ -306,6 +394,7 @@ $treeTarget.Add_DragDrop({
             $result = [System.Windows.Forms.MessageBox]::Show($msg, "Merge or Add as Child?", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel, [System.Windows.Forms.MessageBoxIcon]::Question)
             
             if ($result -eq 'Yes') {
+                Save-TreeState
                 # Perform the merge: copy the tag from source to target.
                 $targetNode.Tag = $draggedNode.Tag
                 $targetNode.ForeColor = [System.Drawing.Color]::DarkBlue # Mark as mapped
@@ -332,6 +421,8 @@ $treeTarget.Add_DragDrop({
             return
         }
 
+        Save-TreeState
+
         # Clone node to move it (or copy if from source)
         $newNode = $draggedNode.Clone()
         
@@ -349,20 +440,21 @@ $treeTarget.Add_DragDrop({
 # Context Menu for Target
 $ctxMenu = New-Object System.Windows.Forms.ContextMenu
 $itemDelete = $ctxMenu.MenuItems.Add("Delete")
-$itemDelete.Add_Click({
-    if ($treeTarget.SelectedNode) {
-        $treeTarget.SelectedNode.Remove()
-    }
-})
+$itemDelete.Add_Click({ Delete-Action })
 $itemRename = $ctxMenu.MenuItems.Add("Rename")
 $itemRename.Add_Click({
     if ($treeTarget.SelectedNode) {
+        if ($treeTarget.SelectedNode.Tag -and $treeTarget.SelectedNode.Tag.SourceDN -eq 'PRE-EXISTING') {
+            [System.Windows.Forms.MessageBox]::Show("You cannot rename a pre-existing OU in this mapping tool.`n`nIf you need to reorganize or rename the existing target infrastructure, please do so directly in Active Directory (RSAT).", "Cannot Rename Pre-Existing OU", "OK", "Warning")
+            return
+        }
         $treeTarget.SelectedNode.BeginEdit()
     }
 })
 $itemNew = $ctxMenu.MenuItems.Add("New OU")
 $itemNew.Add_Click({
     if ($treeTarget.SelectedNode) {
+        Save-TreeState
         $newNode = New-Object System.Windows.Forms.TreeNode
         $newNode.Text = "OU=NewOU"
         $treeTarget.SelectedNode.Nodes.Add($newNode) | Out-Null
@@ -371,9 +463,24 @@ $itemNew.Add_Click({
     }
 })
 
+$ctxMenu.MenuItems.Add("-") | Out-Null
+$itemCopy = $ctxMenu.MenuItems.Add("Copy (Ctrl+C)")
+$itemCopy.Add_Click({ Copy-Action })
+$itemPaste = $ctxMenu.MenuItems.Add("Paste (Ctrl+V)")
+$itemPaste.Add_Click({ Paste-Action })
+
 $treeTarget.ContextMenu = $ctxMenu
 
 # Rename Validation
+$treeTarget.Add_BeforeLabelEdit({
+    param($eventSender, $e)
+    if ($e.Node.Tag -and $e.Node.Tag.SourceDN -eq 'PRE-EXISTING') {
+        $e.CancelEdit = $true
+        [System.Windows.Forms.MessageBox]::Show("You cannot rename a pre-existing OU in this mapping tool.`n`nIf you need to reorganize or rename the existing target infrastructure, please do so directly in Active Directory (RSAT).", "Cannot Rename Pre-Existing OU", "OK", "Warning")
+        return
+    }
+    Save-TreeState
+})
 $treeTarget.Add_AfterLabelEdit({
     param($eventSender, $e)
     if ($e.Label) {
@@ -447,6 +554,60 @@ $btnSave.Add_Click({
 
     Get-TreeData $treeTarget.Nodes
 
+    # Find unmapped source OUs
+    $mappedSourceDNs = $MappingData | Where-Object { -not [string]::IsNullOrWhiteSpace($_.SourceDN) } | Select-Object -ExpandProperty SourceDN
+    $unmappedOUs = $SourceOUs | Where-Object { $_.DistinguishedName -notin $mappedSourceDNs }
+
+    # Update Source Tree Colors
+    function Update-SourceColors ($nodes) {
+        foreach ($node in $nodes) {
+            if ($node.Tag) {
+                if ($node.Tag.SourceDN -notin $mappedSourceDNs) {
+                    $node.ForeColor = [System.Drawing.Color]::Red
+                    # Expand parent
+                    $p = $node.Parent
+                    while ($p) { $p.Expand(); $p = $p.Parent }
+                } else {
+                    $node.ForeColor = [System.Drawing.Color]::DarkBlue
+                }
+            }
+            if ($node.Nodes.Count -gt 0) {
+                Update-SourceColors $node.Nodes
+            }
+        }
+    }
+    
+    $treeSource.BeginUpdate()
+    Update-SourceColors $treeSource.Nodes
+    $treeSource.EndUpdate()
+
+    if ($unmappedOUs.Count -gt 0) {
+        $nonEmptyUnmapped = $unmappedOUs | Where-Object { $_.DistinguishedName -notin $EmptyOUs }
+        
+        if ($nonEmptyUnmapped.Count -gt 0) {
+            $msg = "CRITICAL WARNING: $($nonEmptyUnmapped.Count) unmapped OUs are NOT EMPTY!`nIf you do not map these, any users, computers, or GPOs inside them will be orphaned or fail to migrate.`n`nUnmapped OUs are highlighted in RED in the Source tree.`n`nAre you absolutely SURE you want to save and skip them?"
+        } else {
+            $msg = "Not all OUs were migrated ($($unmappedOUs.Count) unmapped).`nThe unmapped OUs are empty, so skipping them is safe.`nUnmapped OUs have been highlighted in RED in the Source tree.`n`nSave anyway?"
+        }
+        
+        $result = [System.Windows.Forms.MessageBox]::Show($msg, "Unmapped OUs Detected", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        if ($result -eq 'No') {
+            return
+        }
+
+        # Add unmapped to MappingData so they aren't lost
+        foreach ($ou in $unmappedOUs) {
+            $MappingData.Add([PSCustomObject]@{
+                Action      = "Skip"
+                SourceOU    = $ou.OU
+                TargetOU    = ""
+                TargetDN    = ""
+                SourceDN    = $ou.DistinguishedName
+                Description = $ou.Description
+            })
+        }
+    }
+
     # Validation: Check for duplicates
     $duplicates = $MappingData | Group-Object TargetDN | Where-Object { $_.Count -gt 1 }
     if ($duplicates) {
@@ -470,6 +631,21 @@ $txtSourceSearch.Add_KeyDown({ if ($_.KeyCode -eq 'Enter') { Search-Tree $treeSo
 
 $btnTargetSearch.Add_Click({ Search-Tree $treeTarget $txtTargetSearch.Text })
 $txtTargetSearch.Add_KeyDown({ if ($_.KeyCode -eq 'Enter') { Search-Tree $treeTarget $txtTargetSearch.Text; $_.SuppressKeyPress = $true } })
+
+$treeTarget.Add_KeyDown({
+    if ($_.Control -and $_.KeyCode -eq 'Z') {
+        Undo-Action; $_.SuppressKeyPress = $true
+    }
+    elseif ($_.Control -and $_.KeyCode -eq 'C') {
+        Copy-Action; $_.SuppressKeyPress = $true
+    }
+    elseif ($_.Control -and $_.KeyCode -eq 'V') {
+        Paste-Action; $_.SuppressKeyPress = $true
+    }
+    elseif ($_.KeyCode -eq 'Delete') {
+        Delete-Action; $_.SuppressKeyPress = $true
+    }
+})
 
 # --- SHOW ---
 

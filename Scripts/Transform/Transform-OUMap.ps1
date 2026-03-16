@@ -55,7 +55,7 @@ Invoke-Safely -ScriptBlock {
         
         $escapedName = $ou.OU -replace $specialChars, '\$1'
         
-        $targetDN = "OU=$escapedName,OU=Migrated,DC=Target,DC=Local" # Default placeholder
+        $targetDN = "" # Leave blank to force mapping in the GUI/Excel
         if ($TargetBaseDN) {
             $targetDN = "OU=$escapedName,$TargetBaseDN"
         }

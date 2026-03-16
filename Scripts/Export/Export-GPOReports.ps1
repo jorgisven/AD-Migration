@@ -71,11 +71,10 @@ try {
         Write-Log -Message "Found $($GPOs.Count) GPOs to export" -Level INFO
         
         $summaryFile = Join-Path $ExportPath "_GPO_Summary_${SourceDomain}_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
-        $ReportSummary = @()
         $EmptyLinkedGPOs = @()
         
         # Generate reports for each GPO
-        foreach ($GPO in $GPOs) {
+        $ReportSummary = foreach ($GPO in $GPOs) {
             try {
                 $safeName = $GPO.DisplayName -replace '[\\/:"*?<>|]', '_'
 
@@ -88,7 +87,7 @@ try {
                 Get-GPOReport -Guid $GPO.Id -ReportType Xml -Path $xmlPath -Server $SourceDomain
 
                 # Perform actual GPO Backup (Required for Import)
-                Backup-GPO -Guid $GPO.Id -Path $BackupPath -Server $SourceDomain -ProgressAction SilentlyContinue | Out-Null
+                Backup-GPO -Guid $GPO.Id -Path $BackupPath -Server $SourceDomain | Out-Null
 
                 # Check if GPO is linked ONLY to empty OUs
                 [xml]$xmlData = Get-Content $xmlPath
@@ -106,8 +105,8 @@ try {
                     }
                 }
 
-                # Also create a simple CSV entry for quick reference
-                $ReportSummary += [PSCustomObject]@{
+                # Output the object to be collected by the $ReportSummary variable
+                [PSCustomObject]@{
                     GPOName            = $GPO.DisplayName
                     GPOID              = $GPO.Id
                     CreationTime       = $GPO.CreationTime
@@ -118,10 +117,12 @@ try {
                     IsLinkedOnlyToEmpty = $isLinkedOnlyToEmpty
                 }
             } catch {
-                Write-Log -Message "Failed to export report for GPO: $($GPO.DisplayName)" -Level WARN
+                Write-Log -Message "Failed to process GPO '$($GPO.DisplayName)'. Error: $_" -Level WARN
             }
         }
         
+        Write-Log -Message "Generated summary data for $($ReportSummary.Count) GPOs before filtering." -Level INFO
+
         # Handle Empty-Linked GPOs
         if ($EmptyLinkedGPOs.Count -gt 0) {
             # Bring the console window to the front to make sure the user sees this prompt
@@ -136,7 +137,8 @@ try {
             if ($result -eq 'No') {
                 Write-Log -Message "User selected SKIP for empty-linked GPOs. Cleaning up..." -Level INFO
                 # Filter summary
-                $ReportSummary = $ReportSummary | Where-Object { $_.IsLinkedOnlyToEmpty -eq $false }
+                $ReportSummary = $ReportSummary | Where-Object { -not $_.IsLinkedOnlyToEmpty }
+                Write-Log -Message "$($ReportSummary.Count) GPOs remain in summary after filtering." -Level INFO
                 
                 # Delete files for skipped GPOs
                 foreach ($gpoName in $EmptyLinkedGPOs) {
@@ -146,6 +148,13 @@ try {
                     # Note: We don't delete the Backup folder content easily as it uses GUIDs, but the XML/HTML reports are gone.
                 }
             }
+        }
+
+        # Final validation check
+        if ($GPOs.Count -gt 0 -and $ReportSummary.Count -eq 0) {
+            $finalWarnMsg = "WARNING: Found $($GPOs.Count) GPOs but 0 were exported to the summary file. This may be because all GPOs were linked to empty OUs and you chose to skip them, or an error occurred. Please check the logs."
+            Write-Log -Message $finalWarnMsg -Level WARN
+            Write-Host $finalWarnMsg -ForegroundColor Yellow
         }
 
         $ReportSummary | Export-Csv -Path $summaryFile -NoTypeInformation -Encoding UTF8
