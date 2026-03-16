@@ -112,6 +112,39 @@ if ($onlineResult -eq 'Yes') {
                 }
             }
         }
+
+        Write-Host "`n--- Checking for Existing Accounts in Target Domain ---" -ForegroundColor Cyan
+        $accountConflict = $false
+        
+        if (Test-Path $userMapFile) {
+            foreach ($u in $userMap) {
+                if ($u.Action -eq 'Create' -and $u.TargetSam) {
+                    try {
+                        $null = Get-ADUser -Identity $u.TargetSam -Server $TargetDomain -ErrorAction Stop
+                        Write-Host "[-] ERROR: User account '$($u.TargetSam)' already exists in the target domain." -ForegroundColor Red
+                        $accountConflict = $true
+                        $hasErrors = $true
+                    } catch { } # Account does not exist, which is what we want when Action is 'Create'
+                }
+            }
+        }
+
+        if (Test-Path $computerMapFile) {
+            foreach ($c in $computerMap) {
+                if ($c.Action -eq 'Create' -and $c.TargetName) {
+                    try {
+                        $null = Get-ADComputer -Identity $c.TargetName -Server $TargetDomain -ErrorAction Stop
+                        Write-Host "[-] ERROR: Computer account '$($c.TargetName)' already exists in the target domain." -ForegroundColor Red
+                        $accountConflict = $true
+                        $hasErrors = $true
+                    } catch { } # Computer does not exist, which is what we want
+                }
+            }
+        }
+        
+        if (-not $accountConflict) {
+            Write-Host "[+] PASSED: No target account name conflicts found." -ForegroundColor Green
+        }
     } else {
         Write-Host "[-] Live validation skipped (no domain provided)." -ForegroundColor Yellow
     }

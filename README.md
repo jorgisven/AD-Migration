@@ -51,6 +51,9 @@ AD-Migration/
 |   |   |-- Import-GPOLinks.ps1
 |   |   `-- Import-DNS.ps1
 |   |
+|   |-- Client/                 # Endpoint migration tools
+|   |   `-- Migrate-Workstation.ps1
+|   |
 |   `-- ADMigration/            # PowerShell module (core utilities)
 |       |-- ADMigration.psd1    # Module manifest
 |       |-- ADMigration.psm1    # Module implementation
@@ -334,4 +337,4 @@ This repository is designed to support a **clean, trustless migration** where th
 
 ## ⚠️ Disclaimer
 
-This tool is provided as-is for Active Directory migrations. Thoroughly test all scripts in a non-production environment first. Always maintain backups of source and target domains before executing import operations.
+This tool is provided as-is for Active Directory migrations. Thoroughly test all scripts in a non-production environment first. Always maintain backups of source and target domains before executing import operations. **Note:** Certain edge-case features (such as WMI Filter query rewriting) are provided on a best-effort basis and should be manually verified during the Transform phase.

@@ -51,6 +51,7 @@ WMI Filters are separate objects.
 ## Known Limitations
 - **Passwords in GPP**: Group Policy Preferences passwords (cPasswords) are deprecated and insecure. They are typically stripped by modern GPMC tools during backup/restore.
 - **Software Installation**: MSI packages assigned via GPO rely on UNC paths. Ensure the software share is migrated and the Migration Table is updated with the new path.
+- **WMI Filters**: WMI filter migration logic is included and handles basic domain name substitution, but it has not been exhaustively tested against highly complex environments. Always review the generated `WMI_Filters_Ready.csv` carefully before running the import phase.
 ```
 
 ```
