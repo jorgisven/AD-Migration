@@ -10,8 +10,18 @@ The core artifact for account migration is `Identity_Map_Final.csv`. This file l
 |-----------|-----------|-----------|----------|
 | jdoe      | S-1-5-..  | jdoe      | CN=jdoe,OU=Users,DC=target... |
 
+### Mapping Actions
+When configuring the `User_Account_Map.csv` or `Computer_Account_Map.csv` during the Transform phase, you will define an `Action` for each source account:
+- **`Create` (Move)**: The account is net-new. The import script will create it in the designated `TargetOU_DN`, generate a new password, and map the identity in the migration table.
+- **`Merge`**: The user already exists in the target domain (Brownfield). The import script will **skip** creating or modifying the AD object, but will add the identity mapping to the `.migtable` so their old GPO/file permissions translate to their existing target account.
+- **`Skip`**: The account is dead/disabled/obsolete and should not be brought over in any capacity.
+
 ## Handling Passwords
 Since we cannot decrypt the NTLM hashes from the source domain without specialized tools (like Mimikatz, which we avoid for safety), **passwords cannot be migrated**.
+
+This limitation aligns perfectly with the logical expectations of a "clean break" migration:
+- **For "Moved" Users (Net-New to Target):** They are receiving a fundamentally new identity (e.g., `user@newdomain.com` instead of `user@olddomain.com`). It is standard practice and logically sound to issue a new initial password along with their new digital identity.
+- **For "Merged" Users (Already exist in Target):** The user already has an active identity and password in the target domain. They simply continue using their existing target credentials for everything, and their old domain credentials are abandoned.
 
 ### Strategy
 1. **Users**: All migrated users are created with a temporary initial password (e.g., defined in config or random).

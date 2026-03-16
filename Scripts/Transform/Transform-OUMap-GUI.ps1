@@ -179,7 +179,7 @@ function Copy-Action {
     }
 }
 
-function Paste-Action {
+function Invoke-PasteAction {
     if ($script:ClipboardNode -and $treeTarget.SelectedNode) {
         $targetNode = $treeTarget.SelectedNode
         $existing = $targetNode.Nodes | Where-Object { $_.Text -eq $script:ClipboardNode.Text }
@@ -193,7 +193,7 @@ function Paste-Action {
     }
 }
 
-function Delete-Action {
+function Remove-Action {
     $node = $treeTarget.SelectedNode
     if ($node) {
         if ($null -eq $node.Parent) {
@@ -440,7 +440,7 @@ $treeTarget.Add_DragDrop({
 # Context Menu for Target
 $ctxMenu = New-Object System.Windows.Forms.ContextMenu
 $itemDelete = $ctxMenu.MenuItems.Add("Delete")
-$itemDelete.Add_Click({ Delete-Action })
+$itemDelete.Add_Click({ Remove-Action })
 $itemRename = $ctxMenu.MenuItems.Add("Rename")
 $itemRename.Add_Click({
     if ($treeTarget.SelectedNode) {
@@ -467,7 +467,7 @@ $ctxMenu.MenuItems.Add("-") | Out-Null
 $itemCopy = $ctxMenu.MenuItems.Add("Copy (Ctrl+C)")
 $itemCopy.Add_Click({ Copy-Action })
 $itemPaste = $ctxMenu.MenuItems.Add("Paste (Ctrl+V)")
-$itemPaste.Add_Click({ Paste-Action })
+$itemPaste.Add_Click({ Invoke-PasteAction })
 
 $treeTarget.ContextMenu = $ctxMenu
 
@@ -640,10 +640,10 @@ $treeTarget.Add_KeyDown({
         Copy-Action; $_.SuppressKeyPress = $true
     }
     elseif ($_.Control -and $_.KeyCode -eq 'V') {
-        Paste-Action; $_.SuppressKeyPress = $true
+        Invoke-PasteAction; $_.SuppressKeyPress = $true
     }
     elseif ($_.KeyCode -eq 'Delete') {
-        Delete-Action; $_.SuppressKeyPress = $true
+        Remove-Action; $_.SuppressKeyPress = $true
     }
 })
 

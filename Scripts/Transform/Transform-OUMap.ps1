@@ -42,7 +42,7 @@ Invoke-Safely -ScriptBlock {
 
     Write-Log -Message "Generating OU map from $($latestExport.Name)" -Level INFO
 
-    $OUs = Import-Csv -Path $latestExport.FullName
+    $OUs = @(Import-Csv -Path $latestExport.FullName)
     $MappingData = @()
 
     # Helper to escape special characters in DN (e.g. "Sales, West" -> "Sales\, West")

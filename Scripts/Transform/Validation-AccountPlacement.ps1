@@ -29,9 +29,9 @@ $hasErrors = $false
 if (-not (Test-Path $ouMapFile)) {
     throw "OU Map file not found at '$ouMapFile'. Cannot validate account placement."
 }
-$ouMapData = Import-Csv $ouMapFile
-$validOUs = $ouMapData | Where-Object { $_.Action -ne 'Skip' } | Select-Object -ExpandProperty TargetDN
-$validOUSet = [System.Collections.Generic.HashSet[string]]::new($validOUs, [System.StringComparer]::OrdinalIgnoreCase)
+$ouMapData = @(Import-Csv $ouMapFile)
+$validOUs = @($ouMapData | Where-Object { $_.Action -ne 'Skip' } | Select-Object -ExpandProperty TargetDN)
+$validOUSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$validOUs, [System.StringComparer]::OrdinalIgnoreCase)
 # Also add the domain root as a valid placement target
 $domainDN = ($validOUs | Select-Object -First 1) -replace '.*?(DC=.*)', '$1'
 if ($domainDN) { $validOUSet.Add($domainDN) | Out-Null }
@@ -40,7 +40,7 @@ Write-Host "[+] Loaded $($validOUSet.Count) valid OU destinations from OU Map." 
 
 # 2. Validate User Account Placements
 if (Test-Path $userMapFile) {
-    $userMap = Import-Csv $userMapFile
+    $userMap = @(Import-Csv $userMapFile)
     $invalidUserPlacements = @()
     foreach ($user in $userMap) {
         if ($user.Action -eq 'Create' -and -not $validOUSet.Contains($user.TargetOU_DN)) {
@@ -60,7 +60,7 @@ if (Test-Path $userMapFile) {
 
 # 3. Validate Computer Account Placements
 if (Test-Path $computerMapFile) {
-    $computerMap = Import-Csv $computerMapFile
+    $computerMap = @(Import-Csv $computerMapFile)
     $invalidComputerPlacements = @()
     foreach ($computer in $computerMap) {
         if ($computer.Action -eq 'Create' -and -not $validOUSet.Contains($computer.TargetOU_DN)) {
@@ -125,6 +125,13 @@ if ($onlineResult -eq 'Yes') {
                         $accountConflict = $true
                         $hasErrors = $true
                     } catch { } # Account does not exist, which is what we want when Action is 'Create'
+                } elseif ($u.Action -eq 'Merge' -and $u.TargetSam) {
+                    try {
+                        $null = Get-ADUser -Identity $u.TargetSam -Server $TargetDomain -ErrorAction Stop
+                    } catch {
+                        Write-Host "[-] ERROR: User account '$($u.TargetSam)' marked for 'Merge', but does NOT exist in the target domain." -ForegroundColor Red
+                        $hasErrors = $true
+                    }
                 }
             }
         }
@@ -138,6 +145,13 @@ if ($onlineResult -eq 'Yes') {
                         $accountConflict = $true
                         $hasErrors = $true
                     } catch { } # Computer does not exist, which is what we want
+                } elseif ($c.Action -eq 'Merge' -and $c.TargetName) {
+                    try {
+                        $null = Get-ADComputer -Identity $c.TargetName -Server $TargetDomain -ErrorAction Stop
+                    } catch {
+                        Write-Host "[-] ERROR: Computer account '$($c.TargetName)' marked for 'Merge', but does NOT exist in the target domain." -ForegroundColor Red
+                        $hasErrors = $true
+                    }
                 }
             }
         }

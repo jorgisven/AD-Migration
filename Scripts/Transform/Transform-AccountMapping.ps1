@@ -4,16 +4,26 @@
 
 .DESCRIPTION
     Compares exported source users against the target domain to identify naming conflicts.
-    Generates 'Identity_Migration_Plan.csv' (for review) and 'Identity_Map_Final.csv' (for GPO migration tables).
+    Generates individual Account Mapping CSVs and auto-resolves OU destinations using the OU Map.
+    Also generates 'Identity_Map_Final.csv' for the GPO migration table process.
 #>
 
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string]$TargetDomain
 )
 
 # Add GUI support for conflict prompts
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName Microsoft.VisualBasic
+
+if ([string]::IsNullOrWhiteSpace($TargetDomain)) {
+    $TargetDomain = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the FQDN of the TARGET domain (e.g., target.local):", "Account Mapping", "")
+    if ([string]::IsNullOrWhiteSpace($TargetDomain)) {
+        Write-Log -Message "Target domain not provided. Aborting." -Level ERROR
+        throw "Target domain is required for account mapping."
+    }
+}
 
 # Import module and config
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -24,20 +34,28 @@ Write-Log -Message "Loaded ADMigration module from $ModulePath" -Level INFO
 
 $config = Get-ADMigrationConfig
 $SourceSecurityPath = Join-Path $config.ExportRoot 'Security'
-$TransformPath = $config.TransformRoot
+$MapPath = Join-Path $config.TransformRoot 'Mapping'
 
 # Ensure transform directory exists
-if (-not (Test-Path $TransformPath)) { New-Item -ItemType Directory -Path $TransformPath -Force | Out-Null }
+if (-not (Test-Path $MapPath)) { New-Item -ItemType Directory -Path $MapPath -Force | Out-Null }
 
 Write-Log -Message "Starting Account Mapping analysis against $TargetDomain..." -Level INFO
 
-$MigrationPlan = @()
 $IdentityMap = @()
-$script:ConflictCount = 0
-$script:IgnoreConflictWarning = $false
+
+# 1. Load OU Map to pre-fill TargetOU_DN
+$OUMap = @{}
+$ouMapFile = Join-Path $MapPath "OU_Map_Draft.csv"
+if (Test-Path $ouMapFile) {
+    Import-Csv $ouMapFile | ForEach-Object {
+        if ($_.Action -ne 'Skip' -and -not [string]::IsNullOrWhiteSpace($_.SourceDN)) {
+            $OUMap[$_.SourceDN] = $_.TargetDN
+        }
+    }
+    Write-Log -Message "Loaded $($OUMap.Count) mapped OUs for account placement." -Level INFO
+}
 
 Invoke-Safely -ScriptBlock {
-    # Helper function to process different object types
     function Invoke-IdentityMapping {
         param(
             [string]$FileType,
@@ -53,122 +71,106 @@ Invoke-Safely -ScriptBlock {
 
         $items = Import-Csv $files[0].FullName
         Write-Log -Message "Processing $($items.Count) $ObjectType(s) from $($files[0].Name)" -Level INFO
+        
+        $MappingData = @()
 
         foreach ($item in $items) {
-            $sam = $item.SamAccountName
+            $sam = if ($item.SamAccountName) { $item.SamAccountName } elseif ($item.Name) { $item.Name } else { "UNKNOWN" }
             $sid = $item.SID
-            $targetSam = $sam
-            $status = "New"
-            $action = "Create"
-            $notes = ""
+            $targetName = $sam
+            
+            # Computers usually have a trailing $ in SamAccountName, strip it for Name matching
+            if ($ObjectType -eq 'Computer' -and $targetName -match '\$$') {
+                $targetName = $targetName -replace '\$$',''
+            }
+
+            # Determine Target OU
+            $sourceDN = if ($item.DistinguishedName) { $item.DistinguishedName } else { "" }
+            $parentDN = $sourceDN -replace '^[^,]+,', ''
+            $targetOU = if ($OUMap.ContainsKey($parentDN)) { $OUMap[$parentDN] } else { "" }
 
             # Check Target Domain for conflict
             $exists = $false
             try {
-                if ($CheckCmdlet -eq 'Get-ADUser') {
-                    $null = Get-ADUser -Identity $sam -Server $TargetDomain -ErrorAction Stop
-                } elseif ($CheckCmdlet -eq 'Get-ADGroup') {
-                    $null = Get-ADGroup -Identity $sam -Server $TargetDomain -ErrorAction Stop
-                } elseif ($CheckCmdlet -eq 'Get-ADComputer') {
-                    $null = Get-ADComputer -Identity $sam -Server $TargetDomain -ErrorAction Stop
-                }
+                if ($CheckCmdlet -eq 'Get-ADUser') { $null = Get-ADUser -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
+                elseif ($CheckCmdlet -eq 'Get-ADGroup') { $null = Get-ADGroup -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
+                elseif ($CheckCmdlet -eq 'Get-ADComputer') { $null = Get-ADComputer -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
                 $exists = $true
             } catch {
                 $exists = $false
             }
 
             if ($exists) {
-                $script:ConflictCount++
-                
-                # Handle High Conflict Count
-                if ($script:ConflictCount -eq 10 -and -not $script:IgnoreConflictWarning) {
-                    $msg = "More than 10 naming conflicts have been detected so far.`n`nDo you want to continue processing and auto-renaming/skipping?`n`nYes = Continue (Don't ask again)`nNo = Abort Script"
-                    $result = [System.Windows.Forms.MessageBox]::Show($msg, "High Conflict Count", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
-                    if ($result -eq 'No') {
-                        throw "User aborted due to high conflict count."
-                    } else {
-                        $script:IgnoreConflictWarning = $true
-                    }
-                }
+                $action = "Merge"
+                $notes = "Exists in target domain. Defaulted to Merge."
+            } else {
+                $action = "Create"
+                $notes = "Net-new object."
+            }
 
-                # Attempt Auto-Rename (Suggestion)
-                $renamed = $false
-                for ($i = 2; $i -le 99; $i++) {
-                    $candidate = "$sam$i"
-                    try {
-                        if ($CheckCmdlet -eq 'Get-ADUser') { $null = Get-ADUser -Identity $candidate -Server $TargetDomain -ErrorAction Stop }
-                        elseif ($CheckCmdlet -eq 'Get-ADGroup') { $null = Get-ADGroup -Identity $candidate -Server $TargetDomain -ErrorAction Stop }
-                        elseif ($CheckCmdlet -eq 'Get-ADComputer') { $null = Get-ADComputer -Identity $candidate -Server $TargetDomain -ErrorAction Stop }
-                    } catch {
-                        $targetSam = $candidate
-                        $status = "AutoRenamed"
-                        $action = "Create"
-                        $notes = "Conflict detected. Suggested rename: $candidate"
-                        $renamed = $true
-                        break
-                    }
-                }
-
-                if (-not $renamed) {
-                    $status = "Conflict"
-                    $action = "Skip" # Default safety
-                    $notes = "Object exists in target. Auto-rename failed."
+            # Build specific output object
+            if ($ObjectType -eq 'Computer') {
+                $MappingData += [PSCustomObject]@{
+                    Action      = $action
+                    SourceName  = $targetName
+                    TargetName  = $targetName
+                    TargetOU_DN = $targetOU
+                    SourceDN    = $sourceDN
+                    Description = $item.Description
+                    Notes       = $notes
                 }
             } else {
-                # Not found, safe to create
-                $status = "New"
+                $MappingData += [PSCustomObject]@{
+                    Action      = $action
+                    SourceSam   = $sam
+                    TargetSam   = $targetName
+                    TargetOU_DN = $targetOU
+                    SourceDN    = $sourceDN
+                    Description = $item.Description
+                    Notes       = $notes
+                }
             }
 
-            # Add to Plan (Human readable)
-            $MigrationPlan += [PSCustomObject]@{
-                Type        = $ObjectType
-                SourceSam   = $sam
-                TargetSam   = $targetSam
-                Status      = $status
-                Action      = $action
-                Description = $notes
-            }
-
-            # Add to Map (Machine readable for GPO migration)
             # We map SourceSID -> TargetSam because GPO Migration Tables use SIDs
             if ($sid) {
                 $IdentityMap += [PSCustomObject]@{
                     SourceSam = $sam
                     SourceSID = $sid
-                    TargetSam = $targetSam
+                    TargetSam = $targetName
                     Type      = $ObjectType
                 }
             }
         }
+        
+        $outputFile = Join-Path $MapPath "${ObjectType}_Account_Map.csv"
+        $MappingData | Export-Csv -Path $outputFile -NoTypeInformation -Encoding UTF8
+        Write-Log -Message "Generated $outputFile" -Level INFO
+        
+        $mergeCount = ($MappingData | Where-Object { $_.Action -eq 'Merge' }).Count
+        if ($mergeCount -gt 0) {
+            Write-Host "  -> $($ObjectType): Found $mergeCount existing accounts (Set to Merge)." -ForegroundColor Yellow
+        } else {
+            Write-Host "  -> $($ObjectType): All accounts are net-new." -ForegroundColor Green
+        }
     }
 
+    Write-Host "`n--- Scanning Target Domain for Account Collisions ---" -ForegroundColor Cyan
     # Process Users, Groups, and Computers
     Invoke-IdentityMapping -FileType "Users" -ObjectType "User" -CheckCmdlet "Get-ADUser"
     Invoke-IdentityMapping -FileType "Groups" -ObjectType "Group" -CheckCmdlet "Get-ADGroup"
     Invoke-IdentityMapping -FileType "Computers" -ObjectType "Computer" -CheckCmdlet "Get-ADComputer"
 
-    # Output Plan
-    $planFile = Join-Path $TransformPath "Identity_Migration_Plan.csv"
-    $MigrationPlan | Export-Csv -Path $planFile -NoTypeInformation -Encoding UTF8
-    
     # Output Map (Simple format for other scripts)
-    $mapFile = Join-Path $config.TransformRoot "Mapping\Identity_Map_Final.csv"
+    $mapFile = Join-Path $MapPath "Identity_Map_Final.csv"
     $IdentityMap | Export-Csv -Path $mapFile -NoTypeInformation -Encoding UTF8
 
-    Write-Log -Message "Generated migration plan: $planFile" -Level INFO
     Write-Log -Message "Generated identity map: $mapFile" -Level INFO
 
-    $conflicts = $MigrationPlan | Where-Object { $_.Status -eq 'Conflict' }
-    
     Write-Host "----------------------------------------------------------------" -ForegroundColor Cyan
-    Write-Host "Account Mapping Complete"
-    Write-Host "Plan: $planFile"
-    if ($conflicts) {
-        Write-Host "WARNING: Found $($conflicts.Count) naming conflicts in target domain." -ForegroundColor Yellow
-        Write-Host "Check the CSV and update 'TargetSam' or 'Action' columns." -ForegroundColor Yellow
-    } else {
-        Write-Host "No naming conflicts detected." -ForegroundColor Green
-    }
+    Write-Host "Account Mapping Drafts Generated in:\n  $MapPath"
+    Write-Host "\nACTION REQUIRED:" -ForegroundColor Yellow
+    Write-Host "Review the User, Computer, and Group Account Map CSVs." -ForegroundColor Yellow
+    Write-Host "Ensure Target OUs are correct, and verify any 'Merge' actions." -ForegroundColor Yellow
     Write-Host "----------------------------------------------------------------" -ForegroundColor Cyan
 
 } -Operation "Map Accounts"
