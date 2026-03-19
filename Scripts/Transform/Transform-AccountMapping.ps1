@@ -87,6 +87,11 @@ Invoke-Safely -ScriptBlock {
             # Determine Target OU
             $sourceDN = if ($item.DistinguishedName) { $item.DistinguishedName } else { "" }
             $parentDN = $sourceDN -replace '^[^,]+,', ''
+
+            # Skip objects located in the Domain Controllers OU (including child OUs)
+            if ($parentDN -match "(?:^|,)OU=Domain Controllers,") {
+                continue
+            }
             $targetOU = if ($OUMap.ContainsKey($parentDN)) { $OUMap[$parentDN] } else { "" }
 
             # Check Target Domain for conflict

@@ -48,6 +48,14 @@ WMI Filters are separate objects.
 - `Import-WMIFilters.ps1` recreates them.
 - **Note**: The query content is text. If your WMI query references the domain name (e.g., `SELECT * FROM Win32_NTDomain WHERE DomainName = 'SOURCE'`), you must manually update the CSV in the Transform phase.
 
+## Detecting GPO Conflicts
+The best way to detect internal setting conflicts (e.g., two GPOs trying to configure the same registry key with different values) across your migrated GPOs is to use the **Microsoft Policy Analyzer**.
+
+1. Download the **Security Compliance Toolkit** from Microsoft: [https://aka.ms/sct](https://aka.ms/sct) (Select `PolicyAnalyzer.zip` from the download list).
+2. Extract the ZIP file.
+3. Run `PolicyAnalyzer.exe` and point it to your exported backups located at `Export\GPO_Backups\`.
+4. Select the policies you wish to compare and click **View/Compare** to generate a conflict matrix. Any conflicting settings will be highlighted in Yellow.
+
 ## Known Limitations
 - **Passwords in GPP**: Group Policy Preferences passwords (cPasswords) are deprecated and insecure. They are typically stripped by modern GPMC tools during backup/restore.
 - **Software Installation**: MSI packages assigned via GPO rely on UNC paths. Ensure the software share is migrated and the Migration Table is updated with the new path.

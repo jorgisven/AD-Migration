@@ -60,13 +60,21 @@ Invoke-Safely -ScriptBlock {
             $targetDN = "OU=$escapedName,$TargetBaseDN"
         }
 
+        $action = "Migrate"
+        $description = $ou.Description
+        if ($ou.DistinguishedName -match "(?:^|,)OU=Domain Controllers,") {
+            $action = "Skip"
+            $targetDN = ""
+            $description = "Built-in Domain Controllers OU (Auto-Skipped)"
+        }
+
         $MappingData += [PSCustomObject]@{
-            Action        = "Migrate" # Options: Migrate, Merge, Skip, CreateNew
+            Action        = $action # Options: Migrate, Merge, Skip, CreateNew
             SourceOU      = $ou.OU
             TargetOU      = $ou.OU
             TargetDN      = $targetDN
             SourceDN      = $ou.DistinguishedName
-            Description   = $ou.Description
+            Description   = $description
         }
     }
 

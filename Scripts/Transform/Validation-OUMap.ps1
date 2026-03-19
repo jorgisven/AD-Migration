@@ -70,8 +70,14 @@ foreach ($row in $OUMap) {
     # Add to valid DN set for parent check
     $validDNs.Add($row.TargetDN) | Out-Null
 
+        # Ensure the TargetDN is actually an OU (prevents mapping directly to a DC or CN)
+        if ($row.TargetDN -notmatch "^OU=") {
+            Write-Host "[-] ERROR: TargetDN must start with 'OU='. Cannot map to a domain component or container: '$($row.TargetDN)'" -ForegroundColor Red
+            $hasErrors = $true
+        }
+
     # Check for invalid characters in the OU name part
-    $ouName = ($row.TargetDN -split ",")[0] -replace "OU=",""
+        $ouName = ($row.TargetDN -split ",")[0] -replace "^OU=",""
     if ($ouName -match '[\\/:*?"<>|]') {
         Write-Host "[-] ERROR: Invalid characters in OU name for TargetDN '$($row.TargetDN)'" -ForegroundColor Red
         $hasErrors = $true
@@ -140,6 +146,7 @@ Write-Host ""
 if ($hasErrors) {
     Write-Host "=== OU Map Validation FAILED ===" -ForegroundColor Red
     Write-Host "Please correct the errors in '$mapFile' and re-run the validation." -ForegroundColor Red
+    throw "Validation Failed"
 } else {
     Write-Host "=== OU Map Validation Complete ===" -ForegroundColor Green
     Write-Host "OU Map appears to be valid."

@@ -386,23 +386,53 @@ $treeTarget.Add_DragDrop({
     $targetNode = $eventSender.GetNodeAt($targetPoint)
     $draggedNode = $e.Data.GetData([System.Windows.Forms.TreeNode])
 
+        if ($targetNode -and $targetNode.Text -match "^OU=Domain Controllers$") {
+            [System.Windows.Forms.MessageBox]::Show("The 'Domain Controllers' OU is managed by Active Directory and cannot be used as a migration target.`n`nPlease select a different OU.", "Action Denied", "OK", "Warning")
+            return
+        }
+
+        if ($draggedNode -and $draggedNode.Text -match "^OU=Domain Controllers$") {
+            [System.Windows.Forms.MessageBox]::Show("The source 'Domain Controllers' OU cannot be migrated.`n`nDomain Controllers must be manually promoted in the target domain.", "Action Denied", "OK", "Warning")
+            return
+        }
+
     # Handle MERGE action (dragging from source onto an existing target node)
     if ($targetNode -and $draggedNode -and ($draggedNode.TreeView -eq $treeSource)) {
         # A node with a Tag is either pre-existing or already mapped.
         if ($targetNode.Tag) {
-            $msg = "You are dropping onto an existing target OU.`n`nSource: '$($draggedNode.Text)'`nTarget: '$($targetNode.Text)'`n`nWould you like to:`n`n[Yes] Map the source OU to this target OU (Merge).`n[No] Create the source OU as a new child of the target OU.`n[Cancel] Abort the operation."
-            $result = [System.Windows.Forms.MessageBox]::Show($msg, "Merge or Add as Child?", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel, [System.Windows.Forms.MessageBoxIcon]::Question)
+            $mergeForm = New-Object System.Windows.Forms.Form
+            $mergeForm.Text = "Merge or Add as Child?"
+            $mergeForm.Size = New-Object System.Drawing.Size(460, 200)
+            $mergeForm.StartPosition = "CenterParent"
+            $mergeForm.FormBorderStyle = "FixedDialog"
+            $mergeForm.MaximizeBox = $false
+            $mergeForm.MinimizeBox = $false
+
+            $lblMergeMsg = New-Object System.Windows.Forms.Label
+            $lblMergeMsg.Text = "You are dropping onto an existing target OU.`n`nSource: '$($draggedNode.Text)'`nTarget: '$($targetNode.Text)'`n`nWould you like to Merge the source into the target, or create it as a new Child OU?"
+            $lblMergeMsg.Location = New-Object System.Drawing.Point(20, 20)
+            $lblMergeMsg.Size = New-Object System.Drawing.Size(400, 70)
+            $mergeForm.Controls.Add($lblMergeMsg)
+
+            $btnMerge = New-Object System.Windows.Forms.Button; $btnMerge.Text = "Merge"; $btnMerge.Location = New-Object System.Drawing.Point(40, 110); $btnMerge.Size = New-Object System.Drawing.Size(110, 30); $btnMerge.DialogResult = [System.Windows.Forms.DialogResult]::Yes; $mergeForm.Controls.Add($btnMerge)
+            $btnChild = New-Object System.Windows.Forms.Button; $btnChild.Text = "Create Child OU"; $btnChild.Location = New-Object System.Drawing.Point(160, 110); $btnChild.Size = New-Object System.Drawing.Size(120, 30); $btnChild.DialogResult = [System.Windows.Forms.DialogResult]::No; $mergeForm.Controls.Add($btnChild)
+            $btnCancelMerge = New-Object System.Windows.Forms.Button; $btnCancelMerge.Text = "Cancel"; $btnCancelMerge.Location = New-Object System.Drawing.Point(290, 110); $btnCancelMerge.Size = New-Object System.Drawing.Size(100, 30); $btnCancelMerge.DialogResult = [System.Windows.Forms.DialogResult]::Cancel; $mergeForm.Controls.Add($btnCancelMerge)
+
+            $mergeForm.AcceptButton = $btnMerge
+            $mergeForm.CancelButton = $btnCancelMerge
+
+            $result = $mergeForm.ShowDialog()
             
-            if ($result -eq 'Yes') {
+            if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
                 Save-TreeState
                 # Perform the merge: copy the tag from source to target.
                 $targetNode.Tag = $draggedNode.Tag
                 $targetNode.ForeColor = [System.Drawing.Color]::DarkBlue # Mark as mapped
                 return # The drop action is complete.
-            } elseif ($result -eq 'Cancel') {
+            } elseif ($result -eq [System.Windows.Forms.DialogResult]::Cancel) {
                 return # Cancel the drop entirely
             }
-            # If user says No, we fall through to the default "add as child" behavior.
+            # If user says No (Create Child OU), we fall through to the default "add as child" behavior.
         }
     }
 
@@ -522,7 +552,7 @@ $btnSave.Add_Click({
             # Only export OUs (nodes starting with OU= or just assume all non-root nodes are OUs)
             # We assume the root is DC=... and everything under it is an OU structure
             
-            if ($node.Text -match "^OU=" -or $node.Parent) {
+            if ($node.Text -notmatch "^(?:DC|CN)=" -and ($node.Text -match "^OU=" -or $node.Parent)) {
                 # If it has a tag, it came from source
                 if ($node.Tag) {
                     $MappingData.Add([PSCustomObject]@{
@@ -556,6 +586,22 @@ $btnSave.Add_Click({
 
     # Find unmapped source OUs
     $mappedSourceDNs = $MappingData | Where-Object { -not [string]::IsNullOrWhiteSpace($_.SourceDN) } | Select-Object -ExpandProperty SourceDN
+
+    # Auto-skip the Domain Controllers OU so it doesn't trigger unmapped warnings
+    $dcOUs = $SourceOUs | Where-Object { $_.DistinguishedName -match "(?:^|,)OU=Domain Controllers," -and $_.DistinguishedName -notin $mappedSourceDNs }
+    foreach ($dc in $dcOUs) {
+        $MappingData.Add([PSCustomObject]@{
+            Action      = "Skip"
+            SourceOU    = $dc.OU
+            TargetOU    = ""
+            TargetDN    = ""
+            SourceDN    = $dc.DistinguishedName
+            Description = "Built-in Domain Controllers OU (Auto-Skipped)"
+        })
+    }
+    
+    # Refresh mapped list before checking for unmapped OUs
+    $mappedSourceDNs = $MappingData | Where-Object { -not [string]::IsNullOrWhiteSpace($_.SourceDN) } | Select-Object -ExpandProperty SourceDN
     $unmappedOUs = $SourceOUs | Where-Object { $_.DistinguishedName -notin $mappedSourceDNs }
 
     # Update Source Tree Colors
@@ -568,7 +614,7 @@ $btnSave.Add_Click({
                     $p = $node.Parent
                     while ($p) { $p.Expand(); $p = $p.Parent }
                 } else {
-                    $node.ForeColor = [System.Drawing.Color]::DarkBlue
+                    $node.ForeColor = [System.Drawing.Color]::Gray
                 }
             }
             if ($node.Nodes.Count -gt 0) {

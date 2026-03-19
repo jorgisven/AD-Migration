@@ -33,7 +33,9 @@ AD-Migration/
 |   |   |-- Transform-OUMap.ps1
 |   |   |-- Transform-OUMap-GUI.ps1
 |   |   |-- Transform-AccountMapping.ps1
+|   |   |-- Transform-AccountMap-GUI.ps1
 |   |   |-- Transform-GenerateMigrationTable.ps1
+|   |   |-- Transform-MigTable-GUI.ps1
 |   |   |-- Transform-GPOSettings.ps1
 |   |   |-- Transform-WMIFilters.ps1
 |   |   |-- Transform-ACLAnalysis.ps1
@@ -41,6 +43,8 @@ AD-Migration/
 |   |   |-- Validation-Exports.ps1
 |   |   |-- Validation-OUMap.ps1
 |   |   |-- Validation-AccountPlacement.ps1
+|   |   |-- Validation-GPOConflicts.ps1
+|   |   |-- Validation-MigTable.ps1
 |   |   |-- Validation-GPOApplication.ps1
 |   |   `-- Run-AllTransforms.ps1
 |   |

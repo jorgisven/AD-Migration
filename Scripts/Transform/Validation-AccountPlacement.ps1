@@ -168,6 +168,7 @@ Write-Host ""
 if ($hasErrors) {
     Write-Host "=== Account Placement Validation FAILED ===" -ForegroundColor Red
     Write-Host "Please correct the 'TargetOU_DN' in the account mapping files and re-run." -ForegroundColor Red
+    throw "Validation Failed"
 } else {
     Write-Host "=== Account Placement Validation Complete ===" -ForegroundColor Green
     Write-Host "All account placements appear to be valid."

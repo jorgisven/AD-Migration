@@ -56,7 +56,6 @@ if ($MigrationTablePath) {
     try {
         [xml]$migTableXml = Get-Content $MigrationTablePath
         $unmapped = $migTableXml.MigrationTable.Mapping | Where-Object { 
-            ($_.Destination.SID -eq "" -or $_.Destination.SID -eq $null) -and 
             ($_.Destination.Path -eq "" -or $_.Destination.Path -eq $null) 
         }
         if ($unmapped) {
