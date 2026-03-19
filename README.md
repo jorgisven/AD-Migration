@@ -50,10 +50,12 @@ AD-Migration/
 |   |
 |   |-- Import/                 # Import phase scripts
 |   |   |-- Import-OUs.ps1
+|   |   |-- Import-Accounts.ps1
 |   |   |-- Import-GPOs.ps1
 |   |   |-- Import-WMIFilters.ps1
 |   |   |-- Import-GPOLinks.ps1
-|   |   `-- Import-DNS.ps1
+|   |   |-- Import-DNS.ps1
+|   |   `-- Run-AllImports.ps1
 |   |
 |   |-- Client/                 # Endpoint migration tools
 |   |   `-- Migrate-Workstation.ps1

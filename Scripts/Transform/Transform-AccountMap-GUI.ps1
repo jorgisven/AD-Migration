@@ -80,7 +80,7 @@ $tabCtrl.BringToFront()
 
 $script:grids = @{}
 
-function Load-CsvToGrid ($fileName, $tabName) {
+function Import-CsvToGrid ($fileName, $tabName) {
     $csvPath = Join-Path $MapPath $fileName
     if (-not (Test-Path $csvPath)) { return }
 
@@ -172,9 +172,9 @@ $btnSave.Add_Click({
 })
 
 # Load the mappings
-Load-CsvToGrid "User_Account_Map.csv" "Users"
-Load-CsvToGrid "Computer_Account_Map.csv" "Computers"
-Load-CsvToGrid "Group_Account_Map.csv" "Groups"
+Import-CsvToGrid "User_Account_Map.csv" "Users"
+Import-CsvToGrid "Computer_Account_Map.csv" "Computers"
+Import-CsvToGrid "Group_Account_Map.csv" "Groups"
 
 if ($tabCtrl.TabPages.Count -eq 0) {
     [System.Windows.Forms.MessageBox]::Show("No account mapping files found. Run the Transform-AccountMapping step first.", "Error", "OK", "Error")
