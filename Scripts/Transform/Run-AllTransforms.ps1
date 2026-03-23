@@ -190,7 +190,19 @@ try {
     Show-ManualActionPrompt -Title "Automated Transforms Complete" -Message "WMI, GPO, and DNS transforms are complete.`n`nClick OK to generate the final migration summary."
 
     # Optional: Policy Analyzer Integration
-    $analyzerResult = [System.Windows.Forms.MessageBox]::Show("Would you like to run Microsoft Policy Analyzer to check your GPOs for internal conflicts before proceeding?`n`n(Requires Microsoft Security Compliance Toolkit)", "Check GPO Conflicts", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+    $analyzerMsg = @"
+Would you like to run Microsoft Policy Analyzer to check your GPOs for internal conflicts before proceeding?
+
+This step is highly recommended to catch conflicting or duplicate settings before import.
+
+Instructions:
+1. Download Policy Analyzer (Microsoft Security Compliance Toolkit):
+   https://www.microsoft.com/en-us/download/details.aspx?id=55319
+2. In Policy Analyzer, use 'Add...' and select the 'Transform\GPO-Reports' folder from your migration workspace.
+3. Analyze the results for conflicts or issues before proceeding.
+4. Close Policy Analyzer when done, then click Yes to continue.
+"@
+    $analyzerResult = [System.Windows.Forms.MessageBox]::Show($analyzerMsg, "Check GPO Conflicts", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
     if ($analyzerResult -eq 'Yes') {
         Invoke-TransformStep -ScriptName "Validation-GPOConflicts.ps1"
     }

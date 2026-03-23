@@ -82,7 +82,7 @@ Invoke-Safely -ScriptBlock {
             $sam = if ($item.SamAccountName) { $item.SamAccountName } elseif ($item.Name) { $item.Name } else { "UNKNOWN" }
             $sid = $item.SID
             $targetName = $sam
-
+            
             # Computers usually have a trailing $ in SamAccountName, strip it for Name matching
             if ($ObjectType -eq 'Computer' -and $targetName -match '\$$') {
                 $targetName = $targetName -replace '\$$',''
@@ -96,43 +96,25 @@ Invoke-Safely -ScriptBlock {
             if ($parentDN -match "(?:^|,)OU=Domain Controllers,") {
                 continue
             }
-
-            # Built-in accounts: Administrator, Guest, krbtgt, DefaultAccount
-            $builtinAccounts = @('Administrator','Guest','krbtgt','DefaultAccount')
-            $isBuiltin = $false
-            if ($ObjectType -eq 'User' -and $builtinAccounts -contains $targetName) {
-                $isBuiltin = $true
-            }
-
-            $targetOU = if ($isBuiltin) {
-                'BUILTIN (Do not move)'
-            } elseif ($OUMap.ContainsKey($parentDN)) {
-                $OUMap[$parentDN]
-            } else {
-                ""
-            }
+            $targetOU = if ($OUMap.ContainsKey($parentDN)) { $OUMap[$parentDN] } else { "" }
 
             # Check Target Domain for conflict
             $exists = $false
-            if ($isBuiltin) {
-                $action = "Skip"
-                $notes = "Built-in account. Defaulted to Skip."
+            try {
+                if ($CheckCmdlet -eq 'Get-ADUser') { $null = Get-ADUser -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
+                elseif ($CheckCmdlet -eq 'Get-ADGroup') { $null = Get-ADGroup -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
+                elseif ($CheckCmdlet -eq 'Get-ADComputer') { $null = Get-ADComputer -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
+                $exists = $true
+            } catch {
+                $exists = $false
+            }
+
+            if ($exists) {
+                $action = "Merge"
+                $notes = "Exists in target domain. Defaulted to Merge."
             } else {
-                try {
-                    if ($CheckCmdlet -eq 'Get-ADUser') { $null = Get-ADUser -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
-                    elseif ($CheckCmdlet -eq 'Get-ADGroup') { $null = Get-ADGroup -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
-                    elseif ($CheckCmdlet -eq 'Get-ADComputer') { $null = Get-ADComputer -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
-                    $exists = $true
-                } catch {
-                    $exists = $false
-                }
-                if ($exists) {
-                    $action = "Merge"
-                    $notes = "Exists in target domain. Defaulted to Merge."
-                } else {
-                    $action = "Create"
-                    $notes = "Net-new object."
-                }
+                $action = "Create"
+                $notes = "Net-new object."
             }
 
             # Build specific output object
