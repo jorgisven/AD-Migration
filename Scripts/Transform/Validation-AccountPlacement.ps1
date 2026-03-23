@@ -43,13 +43,18 @@ if (Test-Path $userMapFile) {
     $userMap = @(Import-Csv $userMapFile)
     $invalidUserPlacements = @()
     foreach ($user in $userMap) {
+        # Treat BUILTIN (Do not move) as valid for built-in accounts
+        if ($user.TargetOU_DN -eq 'BUILTIN (Do not move)') { continue }
         if ($user.Action -eq 'Create' -and -not $validOUSet.Contains($user.TargetOU_DN)) {
             $invalidUserPlacements += $user
         }
     }
     if ($invalidUserPlacements.Count -gt 0) {
         Write-Host "[-] ERROR: Found $($invalidUserPlacements.Count) users mapped to an invalid or skipped OU." -ForegroundColor Red
-        $invalidUserPlacements | ForEach-Object { Write-Host "  - User: $($_.TargetSam) -> Invalid OU: $($_.TargetOU_DN)" -ForegroundColor Red }
+        foreach ($u in $invalidUserPlacements) {
+            $ouLabel = if ([string]::IsNullOrWhiteSpace($u.TargetOU_DN)) { 'UNSPECIFIED' } elseif ($u.TargetOU_DN -eq 'SKIPPED') { 'SKIPPED' } else { $u.TargetOU_DN }
+            Write-Host "  - User: $($u.TargetSam) -> Invalid OU: $ouLabel" -ForegroundColor Red
+        }
         $hasErrors = $true
     } else {
         Write-Host "[+] PASSED: All user account placements are valid." -ForegroundColor Green
@@ -63,13 +68,17 @@ if (Test-Path $computerMapFile) {
     $computerMap = @(Import-Csv $computerMapFile)
     $invalidComputerPlacements = @()
     foreach ($computer in $computerMap) {
+        if ($computer.TargetOU_DN -eq 'BUILTIN (Do not move)') { continue }
         if ($computer.Action -eq 'Create' -and -not $validOUSet.Contains($computer.TargetOU_DN)) {
             $invalidComputerPlacements += $computer
         }
     }
     if ($invalidComputerPlacements.Count -gt 0) {
         Write-Host "[-] ERROR: Found $($invalidComputerPlacements.Count) computers mapped to an invalid or skipped OU." -ForegroundColor Red
-        $invalidComputerPlacements | ForEach-Object { Write-Host "  - Computer: $($_.TargetName) -> Invalid OU: $($_.TargetOU_DN)" -ForegroundColor Red }
+        foreach ($c in $invalidComputerPlacements) {
+            $ouLabel = if ([string]::IsNullOrWhiteSpace($c.TargetOU_DN)) { 'UNSPECIFIED' } elseif ($c.TargetOU_DN -eq 'SKIPPED') { 'SKIPPED' } else { $c.TargetOU_DN }
+            Write-Host "  - Computer: $($c.TargetName) -> Invalid OU: $ouLabel" -ForegroundColor Red
+        }
         $hasErrors = $true
     } else {
         Write-Host "[+] PASSED: All computer account placements are valid." -ForegroundColor Green
@@ -171,12 +180,13 @@ $logDir = Join-Path $env:USERPROFILE 'Documents/ADMigration/Logs'
 $logMsg = "Detailed logs can be found in: $logDir"
 
 if ($hasErrors) {
+    Write-Log -Message "Account Placement Validation FAILED. See above for details." -Level ERROR
     Write-Host "=== Account Placement Validation FAILED ===" -ForegroundColor Red
     Write-Host "Please correct the 'TargetOU_DN' in the account mapping files, resolve any account name collisions, and re-run." -ForegroundColor Red
     Write-Host $logMsg -ForegroundColor Yellow
     try {
         [System.Windows.Forms.MessageBox]::Show(
-            "Account Placement Validation FAILED.\n\nCheck the console output and logs for details.\n\n$logMsg\n\nCorrect any invalid OUs or account name collisions, then re-run.",
+            "Account Placement Validation FAILED.\nCheck the console output and logs for details.\n$logMsg\nCorrect any invalid OUs or account name collisions, then re-run.",
             "Validation Failed",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
@@ -189,7 +199,7 @@ if ($hasErrors) {
     Write-Host $logMsg -ForegroundColor Yellow
     try {
         [System.Windows.Forms.MessageBox]::Show(
-            "Account Placement Validation Complete.\n\nAll account placements appear to be valid.\n\n$logMsg",
+            "Account Placement Validation Complete.\nAll account placements appear to be valid.\n$logMsg",
             "Validation Passed",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Information

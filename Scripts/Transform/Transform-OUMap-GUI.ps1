@@ -69,7 +69,7 @@ $form.StartPosition = "CenterScreen"
 
 # --- GPO INHERITANCE WARNING ---
 [System.Windows.Forms.MessageBox]::Show(
-    "IMPORTANT: If you change the OU structure or move OUs during migration, inherited GPOs from the source domain will NOT be automatically re-linked in the target domain.\n\nYou must manually re-link GPOs at the appropriate OUs in the target domain to restore intended inheritance.",
+    "IMPORTANT: If you change the OU structure or move OUs during migration, inherited GPOs from the source domain will NOT be automatically re-linked in the target domain.\nYou must manually re-link GPOs at the appropriate OUs in the target domain to restore intended inheritance.",
     "GPO Inheritance Notice",
     [System.Windows.Forms.MessageBoxButtons]::OK,
     [System.Windows.Forms.MessageBoxIcon]::Information

@@ -64,7 +64,7 @@ Invoke-Safely -ScriptBlock {
         )
 
         $files = Get-ChildItem -Path $SourceSecurityPath -Filter "${FileType}_*.csv" | Sort-Object LastWriteTime -Descending
-        if ($null -eq $files) {
+        if (-not $files) {
             Write-Log -Message "No $FileType export found. Skipping." -Level WARN
             return
         }
@@ -75,12 +75,14 @@ Invoke-Safely -ScriptBlock {
         $MappingData = @()
 
         foreach ($item in $items) {
-              # Defensive: Ensure $MappingData is always an array
-                if ($null -eq $MappingData -or $MappingData.GetType().Name -ne 'Object[]') { $MappingData = $null -ne $MappingData ? @($MappingData) : @() }
+            # Defensive: Ensure $MappingData is always an array
+            if ($null -eq $MappingData -or $MappingData.GetType().Name -ne 'Object[]') {
+                $MappingData = @()
+            }
             $sam = if ($item.SamAccountName) { $item.SamAccountName } elseif ($item.Name) { $item.Name } else { "UNKNOWN" }
             $sid = $item.SID
             $targetName = $sam
-            
+
             # Computers usually have a trailing $ in SamAccountName, strip it for Name matching
             if ($ObjectType -eq 'Computer' -and $targetName -match '\$$') {
                 $targetName = $targetName -replace '\$$',''
@@ -94,7 +96,21 @@ Invoke-Safely -ScriptBlock {
             if ($parentDN -match "(?:^|,)OU=Domain Controllers,") {
                 continue
             }
-            $targetOU = if ($OUMap.ContainsKey($parentDN)) { $OUMap[$parentDN] } else { "" }
+
+            # Built-in accounts: Administrator, Guest, krbtgt, DefaultAccount
+            $builtinAccounts = @('Administrator','Guest','krbtgt','DefaultAccount')
+            $isBuiltin = $false
+            if ($ObjectType -eq 'User' -and $builtinAccounts -contains $targetName) {
+                $isBuiltin = $true
+            }
+
+            $targetOU = if ($isBuiltin) {
+                'BUILTIN (Do not move)'
+            } elseif ($OUMap.ContainsKey($parentDN)) {
+                $OUMap[$parentDN]
+            } else {
+                ""
+            }
 
             # Check Target Domain for conflict
             $exists = $false
@@ -141,7 +157,9 @@ Invoke-Safely -ScriptBlock {
             # We map SourceSID -> TargetSam because GPO Migration Tables use SIDs
             if ($sid) {
                  # Defensive: Ensure $IdentityMap is always an array
-                if ($null -eq $IdentityMap -or $IdentityMap.GetType().Name -ne 'Object[]') { $IdentityMap = $null -ne $IdentityMap ? @($IdentityMap) : @() }
+                 if ($null -eq $IdentityMap -or $IdentityMap.GetType().Name -ne 'Object[]') {
+                     $IdentityMap = @()
+                 }
                 $IdentityMap += [PSCustomObject]@{
                     SourceSam = $sam
                     SourceSID = $sid

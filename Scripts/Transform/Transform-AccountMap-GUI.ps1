@@ -114,6 +114,42 @@ function Import-CsvToGrid ($fileName, $tabName) {
     $dgv.AllowUserToDeleteRows = $false
     $dgv.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode]::AllCells
     $tab.Controls.Add($dgv)
+
+    # --- COPY/PASTE SUPPORT ---
+    $dgv.Add_KeyDown({
+        param($sender, $e)
+        $grid = $sender
+        if ($e.Control -and $e.KeyCode -eq 'C') {
+            # Copy selected cell(s) to clipboard
+            $sb = New-Object System.Text.StringBuilder
+            $selRows = $grid.SelectedCells | Sort-Object RowIndex, ColumnIndex | Group-Object RowIndex
+            foreach ($rowGroup in $selRows) {
+                $rowText = ($rowGroup.Group | Sort-Object ColumnIndex | ForEach-Object { $_.Value }) -join "\t"
+                $sb.AppendLine($rowText) | Out-Null
+            }
+            [Windows.Forms.Clipboard]::SetText($sb.ToString().TrimEnd())
+            $e.SuppressKeyPress = $true
+        } elseif ($e.Control -and $e.KeyCode -eq 'V') {
+            # Paste clipboard text into selected cells (row-wise, col-wise)
+            $clipText = [Windows.Forms.Clipboard]::GetText()
+            if (-not [string]::IsNullOrWhiteSpace($clipText) -and $grid.SelectedCells.Count -gt 0) {
+                $startCell = $grid.SelectedCells | Sort-Object RowIndex, ColumnIndex | Select-Object -First 1
+                $rows = $clipText -split "\r?\n"
+                for ($i = 0; $i -lt $rows.Count; $i++) {
+                    $cols = $rows[$i] -split "\t"
+                    $rowIdx = $startCell.RowIndex + $i
+                    if ($rowIdx -ge $grid.RowCount) { break }
+                    for ($j = 0; $j -lt $cols.Count; $j++) {
+                        $colIdx = $startCell.ColumnIndex + $j
+                        if ($colIdx -ge $grid.ColumnCount) { break }
+                        $cell = $grid.Rows[$rowIdx].Cells[$colIdx]
+                        if (-not $cell.ReadOnly) { $cell.Value = $cols[$j] }
+                    }
+                }
+                $e.SuppressKeyPress = $true
+            }
+        }
+    })
     
     # Replace 'Action' column with a ComboBox
     if ($dgv.Columns.Contains("Action")) {
