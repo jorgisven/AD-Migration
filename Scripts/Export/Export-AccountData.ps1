@@ -214,14 +214,35 @@ try {
             # Build and show a custom form
             $form = New-Object System.Windows.Forms.Form
             $form.Text = "High-Privilege Group Memberships"
-            $form.Size = New-Object System.Drawing.Size(500, 450)
+            $form.Size = New-Object System.Drawing.Size(500, 510)
             $form.StartPosition = "CenterScreen"
 
-            $label = New-Object System.Windows.Forms.Label; $label.Text = "The following high-privilege groups have members. Select which memberships to KEEP in the export."; $label.Location = New-Object System.Drawing.Point(10, 10); $label.Size = New-Object System.Drawing.Size(460, 30); $form.Controls.Add($label)
-            
+            $label = New-Object System.Windows.Forms.Label
+            $label.Text = "The following high-privilege groups have members. Select which memberships to KEEP in the export. For accounts that already exist in the target domain, these group additions are additive only—existing permissions will not be removed, only elevated if selected here."
+            $label.Location = New-Object System.Drawing.Point(10, 10)
+            $label.Size = New-Object System.Drawing.Size(460, 30)
+            $form.Controls.Add($label)
+
+            $noteLabel = New-Object System.Windows.Forms.Label
+
+            $noteLabel.Text = "Note: If an account is listed here that you plan to exclude from migration, group membership changes made here will have no effect. Only accounts that are actually migrated will have their group memberships and permissions processed. Review your account mapping to ensure consistency."
+            $noteLabel.Location = New-Object System.Drawing.Point(10, 40)
+            $noteLabel.Size = New-Object System.Drawing.Size(460, 40)
+            $noteLabel.ForeColor = [System.Drawing.Color]::DarkRed
+            $noteLabel.Font = New-Object System.Drawing.Font($label.Font, [System.Drawing.FontStyle]::Italic)
+            $form.Controls.Add($noteLabel)
+
+            $builtinLabel = New-Object System.Windows.Forms.Label
+            $builtinLabel.Text = "Best Practice: Built-in accounts (e.g., Administrator, Guest) should usually NOT have their group memberships imported. These accounts exist by default in every domain, and their memberships are managed by the system. Only include them if you have a specific, documented need."
+            $builtinLabel.Location = New-Object System.Drawing.Point(10, 80)
+            $builtinLabel.Size = New-Object System.Drawing.Size(460, 45)
+            $builtinLabel.ForeColor = [System.Drawing.Color]::DarkBlue
+            $builtinLabel.Font = New-Object System.Drawing.Font($label.Font, [System.Drawing.FontStyle]::Italic)
+            $form.Controls.Add($builtinLabel)
+
             $treeView = New-Object System.Windows.Forms.TreeView
-            $treeView.Location = New-Object System.Drawing.Point(10, 50)
-            $treeView.Size = New-Object System.Drawing.Size(460, 300)
+            $treeView.Location = New-Object System.Drawing.Point(10, 130)
+            $treeView.Size = New-Object System.Drawing.Size(460, 265)
             $treeView.CheckBoxes = $true
             $form.Controls.Add($treeView)
             

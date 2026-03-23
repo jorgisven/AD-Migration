@@ -51,6 +51,7 @@ if (-not $TargetDomain) {
 # --- Script Execution ---
 $scripts = @(
     "Import-OUs.ps1",
+    "Import-Accounts.ps1",
     "Import-WMIFilters.ps1",
     "Import-GPOs.ps1",
     "Import-GPOLinks.ps1",

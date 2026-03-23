@@ -50,10 +50,14 @@ if (Test-Path $userMapFile) {
         }
     }
     if ($invalidUserPlacements.Count -gt 0) {
-        Write-Host "[-] ERROR: Found $($invalidUserPlacements.Count) users mapped to an invalid or skipped OU." -ForegroundColor Red
+        $msg = "Found $($invalidUserPlacements.Count) users mapped to an invalid or skipped OU."
+        Write-Host "[-] ERROR: $msg" -ForegroundColor Red
+        Write-Log -Message $msg -Level ERROR
         foreach ($u in $invalidUserPlacements) {
             $ouLabel = if ([string]::IsNullOrWhiteSpace($u.TargetOU_DN)) { 'UNSPECIFIED' } elseif ($u.TargetOU_DN -eq 'SKIPPED') { 'SKIPPED' } else { $u.TargetOU_DN }
-            Write-Host "  - User: $($u.TargetSam) -> Invalid OU: $ouLabel" -ForegroundColor Red
+            $detail = "User: $($u.TargetSam) -> Invalid OU: $ouLabel"
+            Write-Host "  - $detail" -ForegroundColor Red
+            Write-Log -Message $detail -Level ERROR
         }
         $hasErrors = $true
     } else {
@@ -74,10 +78,14 @@ if (Test-Path $computerMapFile) {
         }
     }
     if ($invalidComputerPlacements.Count -gt 0) {
-        Write-Host "[-] ERROR: Found $($invalidComputerPlacements.Count) computers mapped to an invalid or skipped OU." -ForegroundColor Red
+        $msg = "Found $($invalidComputerPlacements.Count) computers mapped to an invalid or skipped OU."
+        Write-Host "[-] ERROR: $msg" -ForegroundColor Red
+        Write-Log -Message $msg -Level ERROR
         foreach ($c in $invalidComputerPlacements) {
             $ouLabel = if ([string]::IsNullOrWhiteSpace($c.TargetOU_DN)) { 'UNSPECIFIED' } elseif ($c.TargetOU_DN -eq 'SKIPPED') { 'SKIPPED' } else { $c.TargetOU_DN }
-            Write-Host "  - Computer: $($c.TargetName) -> Invalid OU: $ouLabel" -ForegroundColor Red
+            $detail = "Computer: $($c.TargetName) -> Invalid OU: $ouLabel"
+            Write-Host "  - $detail" -ForegroundColor Red
+            Write-Log -Message $detail -Level ERROR
         }
         $hasErrors = $true
     } else {
@@ -113,10 +121,13 @@ if ($onlineResult -eq 'Yes') {
                     Write-Host "[~] PENDING: Destination OU does not exist yet (Will be created during Import): $ou" -ForegroundColor DarkGray
                 } elseif ($ou -eq $domainDN) {
                     Write-Host "[-] ERROR: Domain root does not exist or is unreachable: $ou" -ForegroundColor Red
+                    Write-Log -Message "Domain root does not exist or is unreachable: $ou" -Level ERROR
                     $hasErrors = $true
                 } else {
                     Write-Host "[-] ERROR: Destination OU does not exist in target domain: $ou" -ForegroundColor Red
+                    Write-Log -Message "Destination OU does not exist in target domain: $ou" -Level ERROR
                     Write-Host "    Details: $($_.Exception.Message)" -ForegroundColor Red
+                    Write-Log -Message "    Details: $($_.Exception.Message)" -Level ERROR
                     $hasErrors = $true
                 }
             }
@@ -131,6 +142,7 @@ if ($onlineResult -eq 'Yes') {
                     try {
                         $null = Get-ADUser -Identity $u.TargetSam -Server $TargetDomain -ErrorAction Stop
                         Write-Host "[-] ERROR: User account '$($u.TargetSam)' already exists in the target domain." -ForegroundColor Red
+                                                Write-Log -Message "User account '$($u.TargetSam)' already exists in the target domain." -Level ERROR
                         $accountConflict = $true
                         $hasErrors = $true
                     } catch { } # Account does not exist, which is what we want when Action is 'Create'
@@ -139,6 +151,7 @@ if ($onlineResult -eq 'Yes') {
                         $null = Get-ADUser -Identity $u.TargetSam -Server $TargetDomain -ErrorAction Stop
                     } catch {
                         Write-Host "[-] ERROR: User account '$($u.TargetSam)' marked for 'Merge', but does NOT exist in the target domain." -ForegroundColor Red
+                                                Write-Log -Message "User account '$($u.TargetSam)' marked for 'Merge', but does NOT exist in the target domain." -Level ERROR
                         $hasErrors = $true
                     }
                 }
@@ -151,6 +164,7 @@ if ($onlineResult -eq 'Yes') {
                     try {
                         $null = Get-ADComputer -Identity $c.TargetName -Server $TargetDomain -ErrorAction Stop
                         Write-Host "[-] ERROR: Computer account '$($c.TargetName)' already exists in the target domain." -ForegroundColor Red
+                                                Write-Log -Message "Computer account '$($c.TargetName)' already exists in the target domain." -Level ERROR
                         $accountConflict = $true
                         $hasErrors = $true
                     } catch { } # Computer does not exist, which is what we want
@@ -159,6 +173,7 @@ if ($onlineResult -eq 'Yes') {
                         $null = Get-ADComputer -Identity $c.TargetName -Server $TargetDomain -ErrorAction Stop
                     } catch {
                         Write-Host "[-] ERROR: Computer account '$($c.TargetName)' marked for 'Merge', but does NOT exist in the target domain." -ForegroundColor Red
+                                                Write-Log -Message "Computer account '$($c.TargetName)' marked for 'Merge', but does NOT exist in the target domain." -Level ERROR
                         $hasErrors = $true
                     }
                 }
@@ -182,11 +197,11 @@ $logMsg = "Detailed logs can be found in: $logDir"
 if ($hasErrors) {
     Write-Log -Message "Account Placement Validation FAILED. See above for details." -Level ERROR
     Write-Host "=== Account Placement Validation FAILED ===" -ForegroundColor Red
-    Write-Host "Please correct the 'TargetOU_DN' in the account mapping files, resolve any account name collisions, and re-run." -ForegroundColor Red
+    Write-Host "Please correct the 'TargetOU_DN' in the account mapping files, resolve any account name collisions, and re-run this validation script (Validation-AccountPlacement.ps1)." -ForegroundColor Red
     Write-Host $logMsg -ForegroundColor Yellow
     try {
         [System.Windows.Forms.MessageBox]::Show(
-            "Account Placement Validation FAILED.\nCheck the console output and logs for details.\n$logMsg\nCorrect any invalid OUs or account name collisions, then re-run.",
+            "Account Placement Validation FAILED.\nCheck the console output and logs for details.\n$logMsg\nCorrect any invalid OUs or account name collisions, then re-run this validation script (Validation-AccountPlacement.ps1).",
             "Validation Failed",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error

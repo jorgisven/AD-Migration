@@ -114,21 +114,25 @@ Invoke-Safely -ScriptBlock {
 
             # Check Target Domain for conflict
             $exists = $false
-            try {
-                if ($CheckCmdlet -eq 'Get-ADUser') { $null = Get-ADUser -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
-                elseif ($CheckCmdlet -eq 'Get-ADGroup') { $null = Get-ADGroup -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
-                elseif ($CheckCmdlet -eq 'Get-ADComputer') { $null = Get-ADComputer -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
-                $exists = $true
-            } catch {
-                $exists = $false
-            }
-
-            if ($exists) {
-                $action = "Merge"
-                $notes = "Exists in target domain. Defaulted to Merge."
+            if ($isBuiltin) {
+                $action = "Skip"
+                $notes = "Built-in account. Defaulted to Skip."
             } else {
-                $action = "Create"
-                $notes = "Net-new object."
+                try {
+                    if ($CheckCmdlet -eq 'Get-ADUser') { $null = Get-ADUser -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
+                    elseif ($CheckCmdlet -eq 'Get-ADGroup') { $null = Get-ADGroup -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
+                    elseif ($CheckCmdlet -eq 'Get-ADComputer') { $null = Get-ADComputer -Identity $targetName -Server $TargetDomain -ErrorAction Stop }
+                    $exists = $true
+                } catch {
+                    $exists = $false
+                }
+                if ($exists) {
+                    $action = "Merge"
+                    $notes = "Exists in target domain. Defaulted to Merge."
+                } else {
+                    $action = "Create"
+                    $notes = "Net-new object."
+                }
             }
 
             # Build specific output object

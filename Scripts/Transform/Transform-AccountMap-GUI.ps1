@@ -95,10 +95,28 @@ function Import-CsvToGrid ($fileName, $tabName) {
         $dt.Columns.Add($prop) | Out-Null
     }
     
+    # Load OU Map to check for skipped OUs
+    $ouMapPath = Join-Path $MapPath 'OU_Map_Draft.csv'
+    $ouMap = @{}
+    if (Test-Path $ouMapPath) {
+        Import-Csv $ouMapPath | ForEach-Object {
+            if ($_.Action -eq 'Skip' -and -not [string]::IsNullOrWhiteSpace($_.SourceDN)) {
+                $ouMap[$_.SourceDN] = $_.TargetDN
+            }
+        }
+    }
+
     foreach ($row in $data) {
         $dr = $dt.NewRow()
         foreach ($prop in $props) {
             $dr[$prop] = $row.$prop
+        }
+        # If the row's SourceDN parent OU was skipped, set TargetOU_DN to warning
+        if ($dt.Columns.Contains('SourceDN') -and $dt.Columns.Contains('TargetOU_DN')) {
+            $parentDN = $dr['SourceDN'] -replace '^[^,]+,', ''
+            if ($ouMap.ContainsKey($parentDN)) {
+                $dr['TargetOU_DN'] = 'WARNING: Source OU was skipped during mapping to target domain. Please specify a valid Target OU or set Action to Skip.'
+            }
         }
         $dt.Rows.Add($dr)
     }
@@ -179,16 +197,56 @@ function Import-CsvToGrid ($fileName, $tabName) {
         $dgv.Columns["TargetOU_DN"].AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
     }
 
+    # --- HIGHLIGHT INVALID ACCOUNTS ---
+    $invalidRows = @()
+    if ($dt.Columns.Contains('Action') -and $dt.Columns.Contains('TargetOU_DN')) {
+        for ($i = 0; $i -lt $dt.Rows.Count; $i++) {
+            $row = $dt.Rows[$i]
+            $action = $row['Action']
+            $ou = $row['TargetOU_DN']
+            if ($action -eq 'Create' -and ([string]::IsNullOrWhiteSpace($ou) -or $ou -eq 'SKIPPED' -or $ou -eq 'UNSPECIFIED' -or $ou -like 'WARNING:*')) {
+                $invalidRows += $i
+            }
+        }
+        foreach ($idx in $invalidRows) {
+            foreach ($cell in $dgv.Rows[$idx].Cells) {
+                $cell.Style.BackColor = [System.Drawing.Color]::Salmon
+            }
+        }
+    }
+
     $tabCtrl.TabPages.Add($tab)
     $script:grids[$csvPath] = $dgv
 }
 
 $btnSave.Add_Click({
-    $dgvCount = 0
+    $hasInvalid = $false
     foreach ($key in $script:grids.Keys) {
         $dgv = $script:grids[$key]
+        # Force any pending edits to commit
+        $dgv.EndEdit()
+        $dgv.CurrentCell = $null
         $dt = $dgv.DataSource
-        
+        $invalidRows = @()
+        if ($dt.Columns.Contains('Action') -and $dt.Columns.Contains('TargetOU_DN')) {
+            for ($i = 0; $i -lt $dt.Rows.Count; $i++) {
+                $row = $dt.Rows[$i]
+                $action = $row['Action']
+                $ou = $row['TargetOU_DN']
+                if ($action -eq 'Create' -and ([string]::IsNullOrWhiteSpace($ou) -or $ou -eq 'SKIPPED' -or $ou -eq 'UNSPECIFIED' -or $ou -like 'WARNING:*')) {
+                    $invalidRows += $i
+                }
+            }
+        }
+        if ($invalidRows.Count -gt 0) {
+            $hasInvalid = $true
+            # Highlight invalid rows in red
+            foreach ($idx in $invalidRows) {
+                foreach ($cell in $dgv.Rows[$idx].Cells) {
+                    $cell.Style.BackColor = [System.Drawing.Color]::Salmon
+                }
+            }
+        }
         $exportData = @()
         foreach ($row in $dt.Rows) {
             if ($row.RowState -eq [System.Data.DataRowState]::Deleted) { continue }
@@ -198,13 +256,15 @@ $btnSave.Add_Click({
             }
             $exportData += $obj
         }
-        
         $exportData | Export-Csv -Path $key -NoTypeInformation -Encoding UTF8
         $dgvCount++
     }
-    
-    [System.Windows.Forms.MessageBox]::Show("Successfully saved $dgvCount mapping files.", "Save Complete", "OK", "Information")
-    $form.Close()
+    if ($hasInvalid) {
+        [System.Windows.Forms.MessageBox]::Show("WARNING: Some accounts are still mapped to invalid, skipped, or unspecified OUs. These rows are highlighted in red. Validation will fail until all issues are resolved.", "Unresolved Account Placement Issues", "OK", "Warning")
+    } else {
+        [System.Windows.Forms.MessageBox]::Show("Successfully saved $dgvCount mapping files.", "Save Complete", "OK", "Information")
+        $form.Close()
+    }
 })
 
 # Load the mappings
