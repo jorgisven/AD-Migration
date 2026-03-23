@@ -228,47 +228,142 @@ For example:
 ---
 
 ## 🚀 Quick Start
+---
 
-### 1. Clone the Repository
+## 🛠️ Troubleshooting
+
+### Module Import Fails / Cmdlets Not Found
+**Symptom:** `Import-Module` fails or `Get-Command -Module ADMigration` returns nothing.
+- **Cause:** RSAT or GPMC not installed, or wrong PowerShell version.
+- **Solution:**
+	- Install RSAT and GPMC (see Requirements section)
+	- Use PowerShell 5.1+ or 7+
+	- Restart your PowerShell session after installing new features
+
+### "Module manifest missing" or Path Errors
+**Symptom:** Script throws `Module manifest missing.` or cannot find files.
+- **Cause:** Running scripts from the wrong directory, or missing files after extracting/cloning.
+- **Solution:**
+	- Always run scripts from the project root or as shown in Quick Start
+	- Ensure all files are present after cloning/extracting
+
+### RSAT/GPMC Cmdlets Not Available
+**Symptom:** Errors like `Get-ADUser` or `Get-GPO` not recognized.
+- **Cause:** RSAT or GPMC not installed/enabled.
+- **Solution:**
+	- Run `Add-WindowsCapability -Online -Name "Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0"`
+	- Or enable via Windows Features/Optional Features
+
+### Permission Denied / Admin Rights Required
+**Symptom:** Script fails with access denied or prompts for admin rights.
+- **Cause:** Not running PowerShell as Administrator, or insufficient domain permissions.
+- **Solution:**
+	- Right-click PowerShell and select "Run as Administrator"
+	- Ensure you have the required domain permissions for the phase
+
+### Export/Import Script Fails Midway
+**Symptom:** Script aborts, error in console, or prompts to continue/abort.
+- **Cause:** Missing mapping files, validation errors, or environment issues.
+- **Solution:**
+	- Review the error message and logs in `%USERPROFILE%\Documents\ADMigration\Logs\`
+	- Fix mapping/CSV files as needed and retry
+	- Use the validation scripts to check for missing/invalid data
+
+### GUI Not Launching (Mapping/Transforms)
+**Symptom:** GUI scripts (e.g., OU/Account Mapper) do not open.
+- **Cause:** PowerShell execution policy, missing Windows Forms, or script path issues.
+- **Solution:**
+	- Set execution policy: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`
+	- Ensure you are running on Windows with .NET and Windows Forms support
+	- Run scripts from the correct directory
+
+### Validation Errors
+**Symptom:** Validation scripts fail or flag missing/invalid data.
+- **Cause:** Incomplete or incorrect mapping/CSV files.
+- **Solution:**
+	- Open the referenced CSV and correct errors
+	- Re-run the validation script until it passes
+
+### Log Files: Where to Find Details
+**Symptom:** Need to diagnose what happened in a previous run.
+- **Solution:**
+	- All logs are written to `%USERPROFILE%\Documents\ADMigration\Logs\YYYY-MM-DD.log`
+	- Review these logs for detailed error messages and script output
+
+### 1. Prerequisites
+- **Windows Server or Workstation** with RSAT and GPMC installed
+- **PowerShell 5.1+** (or 7+)
+- **Permissions:**
+	- Source: Read-only (Domain Admin or Backup Operator)
+	- Target: Domain Admin (for import)
+- **Network:** Access to source/target domains as needed
+
+### 2. Clone the Repository
 ```powershell
 git clone https://github.com/jorgisven/AD-Migration.git
 cd AD-Migration
 ```
 
-### 2. Initialize the Module
+### 3. Initialize the Environment
 ```powershell
 Import-Module .\Scripts\ADMigration\ADMigration.psd1 -Force
 Initialize-ADMigration
 ```
+This creates `%USERPROFILE%\Documents\ADMigration\` with Logs, Export, Transform, and Import subfolders.
 
-This creates the local data directory at `%USERPROFILE%\Documents\ADMigration\` with Logs, Export, Transform, and Import subdirectories.
+**Tip:** If you see errors about missing modules, install RSAT and GPMC, then retry.
 
-### 3. Run Export Phase
+### 4. Export Source Domain Data
 ```powershell
-# Run the orchestration script to export all data
 .\Scripts\Export\Run-AllExports.ps1 -SourceDomain "source.local"
 ```
+**What to expect:**
+- Prompts for confirmation and warnings about running on a DC
+- Progress output for each export step (OUs, GPOs, WMI, Accounts, ACLs, DNS)
+- Output files in `%USERPROFILE%\Documents\ADMigration\Export\`
 
-### 4. Review & Process Transforms
-Analyze the exported data in `%USERPROFILE%\Documents\ADMigration\Export\` and create mapping artifacts in the Transform phase folders.
-
-### 5. Run Import Phase
+**Validation:**
+Run:
 ```powershell
-# Create OU hierarchy
-.\Scripts\Import\Import-OUs.ps1
-
-# Restore GPOs
-.\Scripts\Import\Import-GPOs.ps1
-
-# Recreate WMI filters
-.\Scripts\Import\Import-WMIFilters.ps1
-
-# Rebuild GPO links
-.\Scripts\Import\Import-GPOLinks.ps1
+.\Scripts\Transform\Validation-Exports.ps1
 ```
+All required export files should be present and non-empty.
 
-### 6. Validate
-Check logs at `%USERPROFILE%\Documents\ADMigration\Logs\` and run validation tests.
+### 5. Transform & Map Data (Interactive)
+```powershell
+.\Scripts\Transform\Run-AllTransforms.ps1
+```
+**What to expect:**
+- Interactive wizard guides you through:
+	1. Export validation
+	2. OU mapping (manual/GUI)
+	3. Account mapping (manual/GUI)
+	4. WMI, GPO, DNS transforms (automated)
+	5. Migration Table review (manual/GUI)
+- Prompts for manual review and validation at each step
+- All mapping artifacts saved in `%USERPROFILE%\Documents\ADMigration\Transform\`
+
+**Troubleshooting:**
+- If validation fails, review the console/logs and fix mapping files as prompted
+
+### 6. Import to Target Domain
+```powershell
+.\Scripts\Import\Run-AllImports.ps1 -TargetDomain "target.local"
+```
+**What to expect:**
+- Prompts for admin rights and target domain confirmation
+- Runs all import scripts in sequence (OUs, Accounts, WMI, GPOs, Links, DNS)
+- Errors will prompt to continue or abort
+- Logs written to `%USERPROFILE%\Documents\ADMigration\Logs\`
+
+### 7. Validate Migration
+- Review logs in `%USERPROFILE%\Documents\ADMigration\Logs\`
+- Use the checklist in [Docs/ValidationChecklist.md](Docs/ValidationChecklist.md)
+- Run validation scripts in `Scripts/Transform/` as needed
+
+### 8. Rollback (if needed)
+- If validation fails critically, delete created OUs/GPOs in the target, adjust mapping, and re-run import
+- See rollback guidance in the validation checklist
 
 ---
 
@@ -310,14 +405,14 @@ $ExportPath = Join-Path $config.ExportRoot 'OU_Structure'
 
 ## 📊 Status
 
-**Current Phase:** 🚀 Alpha / Testing (Feature Complete...mostly)
+**Current Phase:** 🚀 Beta / Testing (All core features implemented)
 
 - [x] Folder structure established
 - [x] PowerShell module framework created
 - [x] Logging and error handling utilities
 - [x] Export scripts (Complete)
-- [/] Transform scripts (Debugging)
-- [ ] Import scripts (In Progress)
+- [x] Transform scripts (Testing/Refinement)
+- [x] Import scripts (Testing/Refinement)
 - [x] Validation scripts (Complete)
 - [x] Documentation (Complete)
 

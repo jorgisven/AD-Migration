@@ -64,7 +64,7 @@ Invoke-Safely -ScriptBlock {
         )
 
         $files = Get-ChildItem -Path $SourceSecurityPath -Filter "${FileType}_*.csv" | Sort-Object LastWriteTime -Descending
-        if (-not $files) {
+        if ($null -eq $files) {
             Write-Log -Message "No $FileType export found. Skipping." -Level WARN
             return
         }
@@ -75,6 +75,8 @@ Invoke-Safely -ScriptBlock {
         $MappingData = @()
 
         foreach ($item in $items) {
+              # Defensive: Ensure $MappingData is always an array
+                if ($null -eq $MappingData -or $MappingData.GetType().Name -ne 'Object[]') { $MappingData = $null -ne $MappingData ? @($MappingData) : @() }
             $sam = if ($item.SamAccountName) { $item.SamAccountName } elseif ($item.Name) { $item.Name } else { "UNKNOWN" }
             $sid = $item.SID
             $targetName = $sam
@@ -115,7 +117,7 @@ Invoke-Safely -ScriptBlock {
 
             # Build specific output object
             if ($ObjectType -eq 'Computer') {
-                $MappingData += [PSCustomObject]@{
+                 $MappingData += [PSCustomObject]@{
                     Action      = $action
                     SourceName  = $targetName
                     TargetName  = $targetName
@@ -125,7 +127,7 @@ Invoke-Safely -ScriptBlock {
                     Notes       = $notes
                 }
             } else {
-                $MappingData += [PSCustomObject]@{
+                 $MappingData += [PSCustomObject]@{
                     Action      = $action
                     SourceSam   = $sam
                     TargetSam   = $targetName
@@ -138,6 +140,8 @@ Invoke-Safely -ScriptBlock {
 
             # We map SourceSID -> TargetSam because GPO Migration Tables use SIDs
             if ($sid) {
+                 # Defensive: Ensure $IdentityMap is always an array
+                if ($null -eq $IdentityMap -or $IdentityMap.GetType().Name -ne 'Object[]') { $IdentityMap = $null -ne $IdentityMap ? @($IdentityMap) : @() }
                 $IdentityMap += [PSCustomObject]@{
                     SourceSam = $sam
                     SourceSID = $sid

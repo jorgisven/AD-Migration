@@ -1,0 +1,5 @@
+OU_DistinguishedName,GPO_Name
+OU=HR,DC=source,DC=local,Default Domain Policy
+OU=Finance,DC=source,DC=local,Finance GPO
+OU=Finance,DC=source,DC=local,Default Domain Policy
+OU=IT,DC=source,DC=local,IT Security Policy

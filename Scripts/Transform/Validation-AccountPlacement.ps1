@@ -165,11 +165,34 @@ if ($onlineResult -eq 'Yes') {
 }
 
 Write-Host ""
+
+# --- LOG LOCATION AND NEXT STEPS ---
+$logDir = Join-Path $env:USERPROFILE 'Documents/ADMigration/Logs'
+$logMsg = "Detailed logs can be found in: $logDir"
+
 if ($hasErrors) {
     Write-Host "=== Account Placement Validation FAILED ===" -ForegroundColor Red
-    Write-Host "Please correct the 'TargetOU_DN' in the account mapping files and re-run." -ForegroundColor Red
+    Write-Host "Please correct the 'TargetOU_DN' in the account mapping files, resolve any account name collisions, and re-run." -ForegroundColor Red
+    Write-Host $logMsg -ForegroundColor Yellow
+    try {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Account Placement Validation FAILED.\n\nCheck the console output and logs for details.\n\n$logMsg\n\nCorrect any invalid OUs or account name collisions, then re-run.",
+            "Validation Failed",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    } catch {}
     throw "Validation Failed"
 } else {
     Write-Host "=== Account Placement Validation Complete ===" -ForegroundColor Green
     Write-Host "All account placements appear to be valid."
+    Write-Host $logMsg -ForegroundColor Yellow
+    try {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Account Placement Validation Complete.\n\nAll account placements appear to be valid.\n\n$logMsg",
+            "Validation Passed",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        ) | Out-Null
+    } catch {}
 }

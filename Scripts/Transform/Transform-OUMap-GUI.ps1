@@ -53,12 +53,27 @@ if (Test-Path $emptyListFile) {
     $EmptyOUs = @(Get-Content $emptyListFile)
 }
 
+# --- GPO LINKED OUs LOADING ---
+$GpoLinksFile = Join-Path $config.ExportRoot 'GPO_Reports/GPO_LinkedOUs.csv'
+$GpoLinkedOUs = @()
+if (Test-Path $GpoLinksFile) {
+    $GpoLinkedOUs = Import-Csv $GpoLinksFile
+}
+
 # --- GUI SETUP ---
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "AD Migration - OU Mapper"
 $form.Size = New-Object System.Drawing.Size(1000, 700)
 $form.StartPosition = "CenterScreen"
+
+# --- GPO INHERITANCE WARNING ---
+[System.Windows.Forms.MessageBox]::Show(
+    "IMPORTANT: If you change the OU structure or move OUs during migration, inherited GPOs from the source domain will NOT be automatically re-linked in the target domain.\n\nYou must manually re-link GPOs at the appropriate OUs in the target domain to restore intended inheritance.",
+    "GPO Inheritance Notice",
+    [System.Windows.Forms.MessageBoxButtons]::OK,
+    [System.Windows.Forms.MessageBoxIcon]::Information
+)
 
 # Layout
 $splitContainer = New-Object System.Windows.Forms.SplitContainer
@@ -651,6 +666,24 @@ $btnSave.Add_Click({
                 SourceDN    = $ou.DistinguishedName
                 Description = $ou.Description
             })
+        }
+
+        # --- GPO LINKED OUs WARNING ---
+        if ($GpoLinkedOUs.Count -gt 0) {
+            $unmappedDns = $unmappedOUs | Select-Object -ExpandProperty DistinguishedName
+            $linked = $GpoLinkedOUs | Where-Object { $unmappedDns -contains $_.OU_DistinguishedName }
+            if ($linked.Count -gt 0) {
+                $ouGroups = $linked | Group-Object OU_DistinguishedName
+                $gpoMsg = "WARNING: The following unmigrated OUs have GPOs linked:`n`n"
+                foreach ($group in $ouGroups) {
+                    $gpoMsg += "OU: $($group.Name)`n  GPOs: " + ($group.Group | Select-Object -ExpandProperty GPO_Name -Unique -join ", ") + "`n"
+                }
+                $gpoMsg += "`nThese GPO links will NOT be present in the target domain unless you re-link them manually. Continue saving?"
+                $gpoResult = [System.Windows.Forms.MessageBox]::Show($gpoMsg, "Unmigrated OUs with GPO Links", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                if ($gpoResult -eq 'No') {
+                    return
+                }
+            }
         }
     }
 
