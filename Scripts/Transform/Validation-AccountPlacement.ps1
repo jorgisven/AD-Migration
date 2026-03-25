@@ -201,7 +201,7 @@ if ($hasErrors) {
     Write-Host $logMsg -ForegroundColor Yellow
     try {
         [System.Windows.Forms.MessageBox]::Show(
-            "Account Placement Validation FAILED.\nCheck the console output and logs for details.\n$logMsg\nCorrect any invalid OUs or account name collisions, then re-run this validation script (Validation-AccountPlacement.ps1).",
+            "Account Placement Validation FAILED.`nCheck the console output and logs for details.`n$logMsg`nCorrect any invalid OUs or account name collisions, then re-run this validation script (Validation-AccountPlacement.ps1).",
             "Validation Failed",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
@@ -214,7 +214,7 @@ if ($hasErrors) {
     Write-Host $logMsg -ForegroundColor Yellow
     try {
         [System.Windows.Forms.MessageBox]::Show(
-            "Account Placement Validation Complete.\nAll account placements appear to be valid.\n$logMsg",
+            "Account Placement Validation Complete.`nAll account placements appear to be valid.`n$logMsg",
             "Validation Passed",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Information

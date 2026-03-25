@@ -12,10 +12,24 @@ $config = Get-ADMigrationConfig
 $MapPath = Join-Path $config.TransformRoot 'Mapping'
 $MigTablePath = Join-Path $MapPath "MigrationTable.migtable"
 
-if (-not (Test-Path $MigTablePath)) { throw "Migration Table not found at $MigTablePath" }
+Write-Log -Message "Starting Migration Table validation..." -Level INFO
+
+if (-not (Test-Path $MigTablePath)) { 
+    Write-Log -Message "Migration Table not found at $MigTablePath" -Level ERROR
+    throw "Migration Table not found at $MigTablePath" 
+}
 
 Write-Host "Validating Migration Table..." -ForegroundColor Cyan
-[xml]$xml = Get-Content $MigTablePath
+Write-Log -Message "Loading XML from $MigTablePath" -Level INFO
+
+try {
+    [xml]$xml = Get-Content $MigTablePath
+} catch {
+    Write-Log -Message "Failed to parse Migration Table XML: $_" -Level ERROR
+    Write-Host "[-] ERROR: Failed to parse Migration Table XML: $_" -ForegroundColor Red
+    throw "XML Parse Error"
+}
+
 $unmapped = @()
 
 foreach ($m in $xml.GetElementsByTagName("Mapping")) {
@@ -45,15 +59,19 @@ foreach ($m in $xml.GetElementsByTagName("Mapping")) {
 }
 
 if ($unmapped.Count -gt 0) {
-    Write-Host "[-] ERROR: Found $($unmapped.Count) unmapped entries in the Migration Table:" -ForegroundColor Red
+    $errMsg = "Found $($unmapped.Count) unmapped entries in the Migration Table."
+    Write-Log -Message $errMsg -Level ERROR
+    Write-Host "[-] ERROR: $errMsg" -ForegroundColor Red
     foreach ($u in $unmapped) {
         $msg = "  - "
         if ($u.Context) { $msg += $u.Context }
         if ($u.Name) { $msg += ", Name: $($u.Name)" }
         if ($u.Path) { $msg += ", Path: $($u.Path)" }
+        Write-Log -Message $msg -Level ERROR
         Write-Host $msg -ForegroundColor Red
     }
     throw "Validation Failed"
 } else {
+    Write-Log -Message "Validation passed: All Migration Table entries have a destination." -Level INFO
     Write-Host "[+] PASSED: All Migration Table entries have a destination." -ForegroundColor Green
 }

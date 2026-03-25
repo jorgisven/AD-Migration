@@ -49,7 +49,7 @@ if (-not (Test-Path $BackupPath)) {
 }
 
 # Prompt for source domain if not provided
-if (-not $SourceDomain) {
+while ([string]::IsNullOrWhiteSpace($SourceDomain)) {
     $SourceDomain = Read-Host "Enter source domain name (e.g., source.local)"
 }
 
@@ -131,7 +131,7 @@ try {
                 [Win32Functions.Win32SetForegroundWindow]::SetForegroundWindow($myWindowHandle) | Out-Null
             } catch {}
 
-            $msg = "Found $($EmptyLinkedGPOs.Count) GPOs that are linked ONLY to empty OUs.`n`nDo you want to EXPORT them or SKIP (delete) them?"
+            $msg = "Found $($EmptyLinkedGPOs.Count) GPOs that are linked ONLY to empty OUs.`n`nDo you want to EXPORT these empty-linked GPOs?`n`nClick YES to Export them.`nClick NO to Skip (delete) them."
             $result = [System.Windows.Forms.MessageBox]::Show($msg, "Empty-Linked GPOs Detected", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
             
             if ($result -eq 'No') {
@@ -157,7 +157,9 @@ try {
             Write-Host $finalWarnMsg -ForegroundColor Yellow
         }
 
-        $ReportSummary | Export-Csv -Path $summaryFile -NoTypeInformation -Encoding UTF8
+        if ($ReportSummary) {
+            $ReportSummary | Export-Csv -Path $summaryFile -NoTypeInformation -Encoding UTF8
+        }
         
         Write-Log -Message "Exported $($ReportSummary.Count) GPO reports to $ExportPath" -Level INFO
         Write-Host "GPO report export complete: $($ReportSummary.Count) reports generated"

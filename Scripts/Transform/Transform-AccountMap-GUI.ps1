@@ -79,6 +79,7 @@ $tabCtrl.BringToFront()
 # --- FUNCTIONS ---
 
 $script:grids = @{}
+$script:saveErrorCount = 0
 
 function Import-CsvToGrid ($fileName, $tabName) {
     $csvPath = Join-Path $MapPath $fileName
@@ -213,6 +214,9 @@ function Import-CsvToGrid ($fileName, $tabName) {
                 $cell.Style.BackColor = [System.Drawing.Color]::Salmon
             }
         }
+        if ($invalidRows.Count -gt 0) {
+            $tab.Text = "[!] $tabName ($($dt.Rows.Count))"
+        }
     }
 
     $tabCtrl.TabPages.Add($tab)
@@ -221,12 +225,16 @@ function Import-CsvToGrid ($fileName, $tabName) {
 
 $btnSave.Add_Click({
     $hasInvalid = $false
+    $dgvCount = 0
+    $firstErrorTab = $null
     foreach ($key in $script:grids.Keys) {
         $dgv = $script:grids[$key]
         # Force any pending edits to commit
         $dgv.EndEdit()
         $dgv.CurrentCell = $null
         $dt = $dgv.DataSource
+        $tab = $dgv.Parent
+        $baseName = $tab.Tag
         $invalidRows = @()
         if ($dt.Columns.Contains('Action') -and $dt.Columns.Contains('TargetOU_DN')) {
             for ($i = 0; $i -lt $dt.Rows.Count; $i++) {
@@ -240,12 +248,16 @@ $btnSave.Add_Click({
         }
         if ($invalidRows.Count -gt 0) {
             $hasInvalid = $true
+            if ($null -eq $firstErrorTab) { $firstErrorTab = $tab }
+            $tab.Text = "[!] $baseName ($($dt.Rows.Count))"
             # Highlight invalid rows in red
             foreach ($idx in $invalidRows) {
                 foreach ($cell in $dgv.Rows[$idx].Cells) {
                     $cell.Style.BackColor = [System.Drawing.Color]::Salmon
                 }
             }
+        } else {
+            $tab.Text = "$baseName ($($dt.Rows.Count))"
         }
         $exportData = @()
         foreach ($row in $dt.Rows) {
@@ -260,7 +272,8 @@ $btnSave.Add_Click({
         $dgvCount++
     }
     if ($hasInvalid) {
-        [System.Windows.Forms.MessageBox]::Show("WARNING: Some accounts are still mapped to invalid, skipped, or unspecified OUs. These rows are highlighted in red. Validation will fail until all issues are resolved.", "Unresolved Account Placement Issues", "OK", "Warning")
+        if ($firstErrorTab) { $tabCtrl.SelectedTab = $firstErrorTab }
+        [System.Windows.Forms.MessageBox]::Show("WARNING: Some accounts are still mapped to invalid, skipped, or unspecified OUs. These rows are highlighted in red. Validation will fail until all issues are resolved.`n`nPlease check all tabs for completion.", "Unresolved Account Placement Issues", "OK", "Warning")
     } else {
         [System.Windows.Forms.MessageBox]::Show("Successfully saved $dgvCount mapping files.", "Save Complete", "OK", "Information")
         $form.Close()
@@ -289,9 +302,12 @@ $txtSearch.Add_TextChanged({
         $baseName = $tab.Tag
         $totalRows = $dt.Rows.Count
         
+        $hasError = $tab.Text -match "^\[!\]"
+        $prefix = if ($hasError) { "[!] " } else { "" }
+
         if ([string]::IsNullOrWhiteSpace($searchText)) {
             $dt.DefaultView.RowFilter = ""
-            $tab.Text = "$baseName ($totalRows)"
+            $tab.Text = "$prefix$baseName ($totalRows)"
             continue
         }
 
@@ -302,7 +318,7 @@ $txtSearch.Add_TextChanged({
         $dt.DefaultView.RowFilter = $filterParts -join " OR "
         
         $filteredRows = $dt.DefaultView.Count
-        $tab.Text = "$baseName ($filteredRows / $totalRows)"
+        $tab.Text = "$prefix$baseName ($filteredRows / $totalRows)"
     }
 })
 

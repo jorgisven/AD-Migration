@@ -143,6 +143,7 @@ try {
     # 1. Validate Exports
     Write-Host "`n--- Step 1: Validate Exported Data ---" -ForegroundColor Yellow
     Invoke-TransformStep -ScriptName "Validation-Exports.ps1"
+    Write-Log -Message "Export validation completed successfully." -Level INFO
     Show-ManualActionPrompt -Title "Exports Validated" -Message "Export validation complete. Check the output above for any warnings.`n`nClick OK to proceed to OU Mapping."
 
     # 2. OU Mapping
@@ -157,7 +158,9 @@ try {
         try {
             Invoke-TransformStep -ScriptName "Validation-OUMap.ps1"
             $ouValid = $true
+            Write-Log -Message "OU Map validation completed successfully." -Level INFO
         } catch {
+            Write-Log -Message "OU Map validation error: $_" -Level ERROR
             [System.Windows.Forms.MessageBox]::Show("Validation failed! Please check the console behind this window for details.", "Validation Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             $ouMsg = "VALIDATION FAILED! Check the console for errors.`n`nClick 'Launch GUI Mapper' to fix the issues in your mapping, save it, and click OK to try again."
         }
@@ -176,7 +179,9 @@ try {
         try {
             Invoke-TransformStep -ScriptName "Validation-AccountPlacement.ps1"
             $accValid = $true
+            Write-Log -Message "Account Placement validation completed successfully." -Level INFO
         } catch {
+            Write-Log -Message "Account Placement validation error: $_" -Level ERROR
             [System.Windows.Forms.MessageBox]::Show("Validation failed! Please check the console behind this window for details.", "Validation Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             $accMsg = "VALIDATION FAILED! Check the console for errors.`n`nClick 'Launch GUI Mapper' to fix the 'TargetOU_DN' entries in your account mappings, save them, and click OK to try again."
         }
@@ -187,24 +192,26 @@ try {
     Invoke-TransformStep -ScriptName "Transform-WMIFilters.ps1"
     Invoke-TransformStep -ScriptName "Transform-GPOSettings.ps1"
     Invoke-TransformStep -ScriptName "Transform-DNS.ps1"
+    Write-Log -Message "Automated WMI, GPO, and DNS transforms completed successfully." -Level INFO
     Show-ManualActionPrompt -Title "Automated Transforms Complete" -Message "WMI, GPO, and DNS transforms are complete.`n`nClick OK to generate the final migration summary."
 
     # Optional: Policy Analyzer Integration
     $analyzerMsg = @"
-Would you like to run Microsoft Policy Analyzer to check your GPOs for internal conflicts before proceeding?
+Would you like to execute the automated GPO Conflict Validation script before proceeding?
 
-This step is highly recommended to catch conflicting or duplicate settings before import.
+This step is highly recommended to catch conflicting or duplicate settings across your mapped GPOs before import.
 
-Instructions:
-1. Download Policy Analyzer (Microsoft Security Compliance Toolkit):
-   https://www.microsoft.com/en-us/download/details.aspx?id=55319
-2. In Policy Analyzer, use 'Add...' and select the 'Transform\GPO-Reports' folder from your migration workspace.
-3. Analyze the results for conflicts or issues before proceeding.
-4. Close Policy Analyzer when done, then click Yes to continue.
+Note: For a more comprehensive visual review, you can optionally download the Microsoft Policy Analyzer (Security Compliance Toolkit) from: https://aka.ms/sct
+
+Click YES to run the Validation-GPOConflicts.ps1 script.
+Click NO to skip this check and continue to the next step.
 "@
     $analyzerResult = [System.Windows.Forms.MessageBox]::Show($analyzerMsg, "Check GPO Conflicts", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
     if ($analyzerResult -eq 'Yes') {
         Invoke-TransformStep -ScriptName "Validation-GPOConflicts.ps1"
+        Write-Log -Message "GPO Conflict Validation script executed." -Level INFO
+    } else {
+        Write-Log -Message "GPO Conflict Validation skipped by user." -Level INFO
     }
 
     # 5. Final Migration Table
@@ -219,7 +226,9 @@ Instructions:
         try {
             Invoke-TransformStep -ScriptName "Validation-MigTable.ps1"
             $migValid = $true
+            Write-Log -Message "Migration Table validation completed successfully." -Level INFO
         } catch {
+            Write-Log -Message "Migration Table validation error: $_" -Level ERROR
             [System.Windows.Forms.MessageBox]::Show("Validation failed! Please check the console behind this window for details.", "Validation Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             $migMsg = "VALIDATION FAILED! Check the console for errors.`n`nEvery item in the Migration Table must have a Destination mapped. Click 'Launch GUI Editor' to fix the empty fields, save, and click OK to try again."
         }
@@ -228,6 +237,7 @@ Instructions:
 
     [System.Windows.Forms.MessageBox]::Show("The Transform phase is complete. All necessary mapping and rebuild files have been generated in the 'Transform' directory.`n`nYou can now proceed to the Import phase.", "Transform Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     Write-Host "`n=== Transform Sequence Complete ===" -ForegroundColor Cyan
+    Write-Log -Message "Transform Sequence Complete." -Level INFO
 
 } catch {
     Write-Host "`n=== Transform Sequence Failed or Cancelled ===" -ForegroundColor Red

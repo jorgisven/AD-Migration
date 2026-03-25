@@ -74,6 +74,13 @@ Invoke-Safely -ScriptBlock {
         
         $MappingData = @()
 
+        # Define regex patterns for well-known SIDs of built-in accounts to be labeled
+        $builtinSidPatterns = @(
+            'S-1-5-.*-500$', # Administrator
+            'S-1-5-.*-501$', # Guest
+            'S-1-5-.*-502$'  # krbtgt
+        )
+
         foreach ($item in $items) {
             # Defensive: Ensure $MappingData is always an array
             if ($null -eq $MappingData -or $MappingData.GetType().Name -ne 'Object[]') {
@@ -83,6 +90,15 @@ Invoke-Safely -ScriptBlock {
             $sid = $item.SID
             $targetName = $sam
             
+            # --- BUILT-IN ACCOUNT DETECTION ---
+            $isBuiltin = $false
+            foreach ($pattern in $builtinSidPatterns) {
+                if ($sid -match $pattern) {
+                    $isBuiltin = $true
+                    break
+                }
+            }
+
             # Computers usually have a trailing $ in SamAccountName, strip it for Name matching
             if ($ObjectType -eq 'Computer' -and $targetName -match '\$$') {
                 $targetName = $targetName -replace '\$$',''
@@ -96,7 +112,10 @@ Invoke-Safely -ScriptBlock {
             if ($parentDN -match "(?:^|,)OU=Domain Controllers,") {
                 continue
             }
-            $targetOU = if ($OUMap.ContainsKey($parentDN)) { $OUMap[$parentDN] } else { "" }
+            # Only set targetOU from map if it wasn't already set by built-in logic
+            $targetOU = if ($isBuiltin) { 'BUILTIN (Do not move)' }
+                        elseif ($OUMap.ContainsKey($parentDN)) { $OUMap[$parentDN] } 
+                        else { "" }
 
             # Check Target Domain for conflict
             $exists = $false
@@ -109,7 +128,10 @@ Invoke-Safely -ScriptBlock {
                 $exists = $false
             }
 
-            if ($exists) {
+            if ($isBuiltin) {
+                $action = "Skip" # Always skip built-in accounts by default
+                $notes = "Built-in principal. Action set to Skip."
+            } elseif ($exists) {
                 $action = "Merge"
                 $notes = "Exists in target domain. Defaulted to Merge."
             } else {

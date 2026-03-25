@@ -67,6 +67,13 @@ $btnSave.Location = New-Object System.Drawing.Point(810, 10)
 $btnSave.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
 $panelBottom.Controls.Add($btnSave)
 
+$btnSysvol = New-Object System.Windows.Forms.Button
+$btnSysvol.Text = "Auto-Map SYSVOL"
+$btnSysvol.Width = 130
+$btnSysvol.Location = New-Object System.Drawing.Point(670, 10)
+$btnSysvol.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+$panelBottom.Controls.Add($btnSysvol)
+
 $lblInfo = New-Object System.Windows.Forms.Label
 $lblInfo.Text = "Fill in the 'Destination' column for any blank entries. These map source items to your new target domain."
 $lblInfo.AutoSize = $true
@@ -106,17 +113,44 @@ $dgv.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode
 $form.Controls.Add($dgv)
 $dgv.BringToFront()
 
+# Highlight SYSVOL paths for visibility
+# Highlight SYSVOL paths for visibility and empty Destinations for validation errors
+$dgv.Add_CellFormatting({
+    param($sender, $e)
+    if ($e.RowIndex -lt 0) { return }
+
+    if ($sender.Columns[$e.ColumnIndex].Name -eq "Source") {
+        $typeVal = $sender.Rows[$e.RowIndex].Cells["Type"].Value
+        $srcVal = $e.Value
+        if ($null -ne $srcVal -and $typeVal -eq "UNC Path" -and $srcVal -match "(?i)\\sysvol") {
+            $e.CellStyle.BackColor = [System.Drawing.Color]::LightCyan
+            $e.CellStyle.ForeColor = [System.Drawing.Color]::DarkBlue
+        }
+    }
+    if ($sender.Columns[$e.ColumnIndex].Name -eq "Destination") {
+        if ([string]::IsNullOrWhiteSpace($e.Value)) {
+            $e.CellStyle.BackColor = [System.Drawing.Color]::Salmon
+        }
+    }
+})
+
 # Lock non-editable columns
-$dgv.Columns["Type"].ReadOnly = $true
-$dgv.Columns["Type"].DefaultCellStyle.BackColor = [System.Drawing.Color]::LightGray
-$dgv.Columns["Type"].FillWeight = 20
+if ($dgv.Columns.Contains("Type")) {
+    $dgv.Columns["Type"].ReadOnly = $true
+    $dgv.Columns["Type"].DefaultCellStyle.BackColor = [System.Drawing.Color]::LightGray
+    $dgv.Columns["Type"].FillWeight = 20
+}
 
-$dgv.Columns["Source"].ReadOnly = $true
-$dgv.Columns["Source"].DefaultCellStyle.BackColor = [System.Drawing.Color]::LightGray
-$dgv.Columns["Source"].FillWeight = 40
+if ($dgv.Columns.Contains("Source")) {
+    $dgv.Columns["Source"].ReadOnly = $true
+    $dgv.Columns["Source"].DefaultCellStyle.BackColor = [System.Drawing.Color]::LightGray
+    $dgv.Columns["Source"].FillWeight = 40
+}
 
-$dgv.Columns["Destination"].DefaultCellStyle.BackColor = [System.Drawing.Color]::LightYellow
-$dgv.Columns["Destination"].FillWeight = 40
+if ($dgv.Columns.Contains("Destination")) {
+    $dgv.Columns["Destination"].DefaultCellStyle.BackColor = [System.Drawing.Color]::LightYellow
+    $dgv.Columns["Destination"].FillWeight = 40
+}
 
 # Events
 $txtSearch.Add_TextChanged({
@@ -125,12 +159,37 @@ $txtSearch.Add_TextChanged({
     else { $dt.DefaultView.RowFilter = "Type LIKE '*$searchText*' OR Source LIKE '*$searchText*' OR Destination LIKE '*$searchText*'" }
 })
 
-$btnSave.Add_Click({
+$btnSysvol.Add_Click({
+    $targetDomain = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the FQDN of the TARGET domain (e.g., target.local) to automatically translate SYSVOL paths:", "Auto-Map SYSVOL", "")
+    if ([string]::IsNullOrWhiteSpace($targetDomain)) { return }
+
+    $updated = 0
     foreach ($row in $dt.Rows) {
+        if ($row["Type"] -eq "UNC Path" -and $row["Source"] -match "(?i)\\sysvol") {
+            $src = $row["Source"]
+            $parts = $src -split "\\"
+            # Ensure it is a valid UNC path containing SYSVOL in the share position
+            if ($parts.Count -ge 4 -and $parts[3] -match "(?i)sysvol") {
+                $oldDomain = $parts[2]
+                $newDest = $src -ireplace [regex]::Escape($oldDomain), $targetDomain
+                $row["Destination"] = $newDest
+                $updated++
+            }
+        }
+    }
+    [System.Windows.Forms.MessageBox]::Show("Successfully updated $updated SYSVOL paths to point to '$targetDomain'.", "Auto-Map Complete", "OK", "Information") | Out-Null
+})
+
+$btnSave.Add_Click({
+    $dgv.EndEdit()
+    foreach ($row in $dt.Rows) {
+        $destVal = if ($row["Destination"] -is [System.DBNull]) { "" } else { [string]$row["Destination"] }
         foreach ($m in $mappings) {
             $mType = if ($m.Source.GetAttribute("xsi:type")) { $m.Source.GetAttribute("xsi:type") } else { $m.Source.GetAttribute("type", "http://www.w3.org/2001/XMLSchema-instance") }
             if ($row["Type"] -eq "Security Principal" -and $mType -eq "GPMTrustee" -and $m.Source.GetAttribute("Name") -eq $row["Source"]) { $m.Destination.SetAttribute("Name", $row["Destination"]); break }
             if ($row["Type"] -eq "UNC Path" -and $mType -eq "GPMPath" -and $m.Source.GetAttribute("Path") -eq $row["Source"]) { $m.Destination.SetAttribute("Path", $row["Destination"]); break }
+            if ($row["Type"] -eq "Security Principal" -and $mType -eq "GPMTrustee" -and $m.Source.GetAttribute("Name") -eq $row["Source"]) { $m.Destination.SetAttribute("Name", $destVal); break }
+            if ($row["Type"] -eq "UNC Path" -and $mType -eq "GPMPath" -and $m.Source.GetAttribute("Path") -eq $row["Source"]) { $m.Destination.SetAttribute("Path", $destVal); break }
         }
     }
     $script:migXml.Save($MigTablePath)

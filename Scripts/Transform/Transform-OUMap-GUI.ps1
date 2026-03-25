@@ -641,6 +641,7 @@ $btnSave.Add_Click({
     $treeSource.BeginUpdate()
     Update-SourceColors $treeSource.Nodes
     $treeSource.EndUpdate()
+    $treeSource.Refresh() # Force WinForms to repaint the TreeView before the message box blocks the thread
 
     if ($unmappedOUs.Count -gt 0) {
         $nonEmptyUnmapped = $unmappedOUs | Where-Object { $_.DistinguishedName -notin $EmptyOUs }
