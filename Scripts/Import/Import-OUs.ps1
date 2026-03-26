@@ -53,7 +53,7 @@ Invoke-Safely -ScriptBlock {
             
             try {
                 # Try to create the OU
-                if ($PSCmdlet.ShouldProcess($targetDN, "Create OU")) {
+                if ($PSCmdlet.ShouldProcess($targetDN, "Create OU") -and -not $WhatIfPreference) {
                     New-ADOrganizationalUnit -Name $name -Path $parentPath -Description $row.Description -Server $TargetDomain -ProtectedFromAccidentalDeletion $true -ErrorAction Stop
                     Write-Log -Message "Created OU: $targetDN" -Level INFO
                 }

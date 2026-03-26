@@ -146,6 +146,7 @@ Invoke-Safely -ScriptBlock {
     # Get list of backups from manifest; fallback to backup.xml discovery if manifest is missing.
     $manifestPath = Join-Path $BackupPath "manifest.xml"
     $manifestPathAlt = Join-Path $BackupPath "Manifest.xml"
+    $statusCsvFiles = Get-ChildItem -Path $BackupPath -Filter "_GPO_Backup_Status_*.csv" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
     $backups = @()
 
     if (Test-Path $manifestPath) {
@@ -156,16 +157,28 @@ Invoke-Safely -ScriptBlock {
         [xml]$manifest = Get-Content $manifestPathAlt
         $backups = @($manifest.Backups.BackupInst)
         Write-Log -Message "Loaded $($backups.Count) GPO backup entries from Manifest.xml." -Level INFO
+    } elseif ($statusCsvFiles.Count -gt 0) {
+        $csvData = Import-Csv $statusCsvFiles[0].FullName
+        foreach ($row in $csvData) {
+            if ($row.BackupStatus -eq 'Succeeded' -and -not [string]::IsNullOrWhiteSpace($row.GPOID) -and -not [string]::IsNullOrWhiteSpace($row.GPOName)) {
+                $backups += [PSCustomObject]@{
+                    ID = $row.GPOID
+                    GPODisplayName = $row.GPOName
+                }
+            }
+        }
+        Write-Log -Message "Loaded $($backups.Count) GPO backup entries from $($statusCsvFiles[0].Name)." -Level INFO
     } else {
-        Write-Log -Message "Backup manifest was not found in '$BackupPath'. Falling back to backup.xml discovery." -Level WARN
+        Write-Log -Message "Backup manifest and status CSV were not found in '$BackupPath'. Falling back to backup.xml discovery." -Level WARN
 
         $backupXmlFiles = Get-ChildItem -Path $BackupPath -Filter "backup.xml" -Recurse -File -ErrorAction SilentlyContinue
         foreach ($backupXml in $backupXmlFiles) {
             try {
                 [xml]$backupDoc = Get-Content $backupXml.FullName
-                $idNode = $backupDoc.SelectSingleNode("//ID")
-                $nameNode = $backupDoc.SelectSingleNode("//GPODisplayName")
-                $id = if ($idNode) { [string]$idNode.InnerText } else { "" }
+                $idNode = $backupDoc.SelectSingleNode("//*[local-name()='ID']")
+                $nameNode = $backupDoc.SelectSingleNode("//*[local-name()='GPODisplayName']")
+                if (-not $nameNode) { $nameNode = $backupDoc.SelectSingleNode("//*[local-name()='Name']") }
+                $id = if ($idNode) { [string]$idNode.InnerText } else { $backupXml.Directory.Name }
                 $name = if ($nameNode) { [string]$nameNode.InnerText } else { "" }
 
                 if (-not [string]::IsNullOrWhiteSpace($id) -and -not [string]::IsNullOrWhiteSpace($name)) {
@@ -274,7 +287,7 @@ Invoke-Safely -ScriptBlock {
         }
         
         try {
-            if ($PSCmdlet.ShouldProcess($targetGpoName, "Import GPO")) {
+            if ($PSCmdlet.ShouldProcess($targetGpoName, "Import GPO") -and -not $WhatIfPreference) {
                 $script:GpoImportStats.ImportAttempted++
                 Import-GPO @params | Out-Null
                 $script:GpoImportStats.Imported++

@@ -54,10 +54,25 @@ if (Test-Path $emptyListFile) {
 }
 
 # --- GPO LINKED OUs LOADING ---
-$GpoLinksFile = Join-Path $config.ExportRoot 'GPO_Reports/GPO_LinkedOUs.csv'
 $GpoLinkedOUs = @()
-if (Test-Path $GpoLinksFile) {
-    $GpoLinkedOUs = Import-Csv $GpoLinksFile
+$ReportPath = Join-Path $config.ExportRoot 'GPO_Reports'
+if (Test-Path $ReportPath) {
+    $xmlFiles = Get-ChildItem -Path $ReportPath -Filter "*.xml"
+    foreach ($xmlFile in $xmlFiles) {
+        try {
+            [xml]$xml = Get-Content $xmlFile.FullName
+            $gpoName = $xml.GPO.Name
+            $links = $xml.GPO.LinksTo
+            if ($links) {
+                foreach ($link in $links) {
+                    $GpoLinkedOUs += [PSCustomObject]@{
+                        GPO_Name = $gpoName
+                        SOMPath  = ([string]$link.SOMPath).Trim() -replace '\s*,\s*', ','
+                    }
+                }
+            }
+        } catch { }
+    }
 }
 
 # --- GUI SETUP ---
@@ -69,7 +84,7 @@ $form.StartPosition = "CenterScreen"
 
 # --- GPO INHERITANCE WARNING ---
 [System.Windows.Forms.MessageBox]::Show(
-    "IMPORTANT: If you change the OU structure or move OUs during migration, inherited GPOs from the source domain will NOT be automatically re-linked in the target domain.\nYou must manually re-link GPOs at the appropriate OUs in the target domain to restore intended inheritance.",
+    "IMPORTANT: If you change the OU structure or move OUs during migration, inherited GPOs from the source domain will NOT be automatically re-linked in the target domain.`nYou must manually re-link GPOs at the appropriate OUs in the target domain to restore intended inheritance.",
     "GPO Inheritance Notice",
     [System.Windows.Forms.MessageBoxButtons]::OK,
     [System.Windows.Forms.MessageBoxIcon]::Information
@@ -647,7 +662,7 @@ $btnSave.Add_Click({
         $nonEmptyUnmapped = $unmappedOUs | Where-Object { $_.DistinguishedName -notin $EmptyOUs }
         
         if ($nonEmptyUnmapped.Count -gt 0) {
-            $msg = "CRITICAL WARNING: $($nonEmptyUnmapped.Count) unmapped OUs are NOT EMPTY!`nIf you do not map these, any users, computers, or GPOs inside them will be orphaned or fail to migrate.`n`nUnmapped OUs are highlighted in RED in the Source tree.`n`nAre you absolutely SURE you want to save and skip them?"
+            $msg = "CRITICAL WARNING: $($nonEmptyUnmapped.Count) unmapped OUs are NOT EMPTY!`nIf you do not map these, any users or computers inside them will be orphaned or fail to migrate.`n`nUnmapped OUs are highlighted in RED in the Source tree.`n`nAre you absolutely SURE you want to save and skip them?"
         } else {
             $msg = "Not all OUs were migrated ($($unmappedOUs.Count) unmapped).`nThe unmapped OUs are empty, so skipping them is safe.`nUnmapped OUs have been highlighted in RED in the Source tree.`n`nSave anyway?"
         }
@@ -671,17 +686,56 @@ $btnSave.Add_Click({
 
         # --- GPO LINKED OUs WARNING ---
         if ($GpoLinkedOUs.Count -gt 0) {
-            $unmappedDns = $unmappedOUs | Select-Object -ExpandProperty DistinguishedName
-            $linked = $GpoLinkedOUs | Where-Object { $unmappedDns -contains $_.OU_DistinguishedName }
+            $unmappedDnsMap = @{}
+            foreach ($ou in $unmappedOUs) {
+                $norm = ($ou.DistinguishedName).Trim() -replace '\s*,\s*', ','
+                $unmappedDnsMap[$norm.ToLowerInvariant()] = $ou.DistinguishedName
+            }
+            
+            $linked = @()
+            foreach ($gpoLink in $GpoLinkedOUs) {
+                $somNorm = $gpoLink.SOMPath.ToLowerInvariant()
+                if ($unmappedDnsMap.ContainsKey($somNorm)) {
+                    $linked += [PSCustomObject]@{
+                        OU_DistinguishedName = $unmappedDnsMap[$somNorm]
+                        GPO_Name = $gpoLink.GPO_Name
+                    }
+                }
+            }
+
             if ($linked.Count -gt 0) {
                 $ouGroups = $linked | Group-Object OU_DistinguishedName
-                $gpoMsg = "WARNING: The following unmigrated OUs have GPOs linked:`n`n"
+                
+                $sb = New-Object System.Text.StringBuilder
+                $sb.AppendLine("WARNING: The following unmigrated OUs have GPOs linked:`n") | Out-Null
                 foreach ($group in $ouGroups) {
-                    $gpoMsg += "OU: $($group.Name)`n  GPOs: " + ($group.Group | Select-Object -ExpandProperty GPO_Name -Unique -join ", ") + "`n"
+                    $sb.AppendLine("OU: $($group.Name)") | Out-Null
+                    $sb.AppendLine("  GPOs: " + ($group.Group | Select-Object -ExpandProperty GPO_Name -Unique -join ", ")) | Out-Null
+                    $sb.AppendLine() | Out-Null
                 }
-                $gpoMsg += "`nThese GPO links will NOT be present in the target domain unless you re-link them manually. Continue saving?"
-                $gpoResult = [System.Windows.Forms.MessageBox]::Show($gpoMsg, "Unmigrated OUs with GPO Links", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
-                if ($gpoResult -eq 'No') {
+                $sb.AppendLine("These GPO links will NOT be present in the target domain unless you map these OUs or re-link the GPOs manually later.") | Out-Null
+                $sb.AppendLine("Continue saving?") | Out-Null
+                
+                $gpoForm = New-Object System.Windows.Forms.Form
+                $gpoForm.Text = "Unmigrated OUs with GPO Links"
+                $gpoForm.Size = New-Object System.Drawing.Size(650, 450)
+                $gpoForm.StartPosition = "CenterParent"
+                
+                $txtReport = New-Object System.Windows.Forms.TextBox
+                $txtReport.Multiline = $true
+                $txtReport.ScrollBars = "Vertical"
+                $txtReport.ReadOnly = $true
+                $txtReport.Font = New-Object System.Drawing.Font("Consolas", 10)
+                $txtReport.Text = $sb.ToString()
+                $txtReport.Dock = "Fill"
+                
+                $pnlBottom = New-Object System.Windows.Forms.Panel; $pnlBottom.Height = 50; $pnlBottom.Dock = "Bottom"
+                $btnYes = New-Object System.Windows.Forms.Button; $btnYes.Text = "Yes, Continue"; $btnYes.DialogResult = "Yes"; $btnYes.Location = New-Object System.Drawing.Point(410, 10); $btnYes.Size = New-Object System.Drawing.Size(100, 30); $pnlBottom.Controls.Add($btnYes)
+                $btnNo = New-Object System.Windows.Forms.Button; $btnNo.Text = "No, Cancel"; $btnNo.DialogResult = "No"; $btnNo.Location = New-Object System.Drawing.Point(520, 10); $btnNo.Size = New-Object System.Drawing.Size(100, 30); $pnlBottom.Controls.Add($btnNo)
+                
+                $gpoForm.Controls.Add($txtReport); $gpoForm.Controls.Add($pnlBottom); $gpoForm.CancelButton = $btnNo
+                
+                if ($gpoForm.ShowDialog() -ne [System.Windows.Forms.DialogResult]::Yes) {
                     return
                 }
             }

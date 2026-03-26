@@ -219,7 +219,7 @@ Invoke-Safely -ScriptBlock {
                         # Note: Get-GPO doesn't easily show links, usually we just try to add it
                         # New-GPLink throws if GPO doesn't exist, but we assume Import-GPOs ran
                         
-                        if ($PSCmdlet.ShouldProcess($targetSOM, "Link GPO '$gpoName'")) {
+                        if ($PSCmdlet.ShouldProcess($targetSOM, "Link GPO '$gpoName'") -and -not $WhatIfPreference) {
                             New-GPLink -Name $gpoName -Target $targetSOM -LinkEnabled ($link.Enabled -eq 'true') -Enforced ($link.NoOverride -eq 'true') -Server $TargetDomain -ErrorAction Stop | Out-Null
                             $script:LinkStats.Linked++
                             Write-Log -Message "Linked '$gpoName' to '$targetSOM'" -Level INFO
@@ -244,7 +244,7 @@ Invoke-Safely -ScriptBlock {
         $wmiFilter = $xml.GPO.FilterData.Name
         if ($wmiFilter) {
             try {
-                if ($PSCmdlet.ShouldProcess($gpoName, "Link WMI Filter '$wmiFilter'")) {
+                if ($PSCmdlet.ShouldProcess($gpoName, "Link WMI Filter '$wmiFilter'") -and -not $WhatIfPreference) {
                     $gpo = Get-GPO -Name $gpoName -Server $TargetDomain
                     $gpo.WmiFilter = $wmiFilter # This property sets the link
                     Write-Log -Message "Linked WMI Filter '$wmiFilter' to '$gpoName'" -Level INFO
@@ -283,11 +283,11 @@ Invoke-Safely -ScriptBlock {
 
                     try {
                         Write-Log -Message "Applying GpoApply security filter for '$trusteeName' on GPO '$gpoName'" -Level INFO
-                        if ($PSCmdlet.ShouldProcess($gpoName, "Set GPPermission '$trusteeName'")) {
+                        if ($PSCmdlet.ShouldProcess($gpoName, "Set GPPermission '$trusteeName'") -and -not $WhatIfPreference) {
                             Set-GPPermission -Name $gpoName -PermissionLevel GpoApply -TargetName $trusteeName -TargetType $trusteeType -Server $TargetDomain -ErrorAction Stop
                         }
                         Write-Log -Message "Applying GpoApply security filter for '$targetTrustee' (Source: $trusteeName) on GPO '$gpoName'" -Level INFO
-                        if ($PSCmdlet.ShouldProcess($gpoName, "Set GPPermission '$targetTrustee'")) {
+                        if ($PSCmdlet.ShouldProcess($gpoName, "Set GPPermission '$targetTrustee'") -and -not $WhatIfPreference) {
                             Set-GPPermission -Name $gpoName -PermissionLevel GpoApply -TargetName $targetTrustee -TargetType $trusteeType -Server $TargetDomain -ErrorAction Stop
                             $customFiltersApplied = $true
                         }
@@ -305,7 +305,7 @@ Invoke-Safely -ScriptBlock {
             if ($customFiltersApplied) {
                 try {
                     Write-Log -Message "Custom filters applied. Removing default 'Authenticated Users' GpoApply permission from '$gpoName'." -Level INFO
-                    if ($PSCmdlet.ShouldProcess($gpoName, "Remove 'Authenticated Users'")) {
+                    if ($PSCmdlet.ShouldProcess($gpoName, "Remove 'Authenticated Users'") -and -not $WhatIfPreference) {
                         Set-GPPermission -Name $gpoName -PermissionLevel None -TargetName 'Authenticated Users' -TargetType Group -Server $TargetDomain -ErrorAction Stop
                     }
                 } catch {

@@ -32,6 +32,7 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # --- Admin Check ---
 Add-Type -AssemblyName System.Windows.Forms
+try { Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction Stop } catch { }
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $msg = "This script must be run as an Administrator to create objects in Active Directory.`nPlease restart your PowerShell session with 'Run as Administrator'."
     [System.Windows.Forms.MessageBox]::Show($msg, "Administrator Privileges Required", "OK", "Error")
@@ -193,7 +194,6 @@ if (-not $TargetDomain) {
     }
 }
 if (-not $TargetDomain) {
-    Add-Type -AssemblyName Microsoft.VisualBasic
     $TargetDomain = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the FQDN of the TARGET domain:", "Import Phase", "target.local")
     if ([string]::IsNullOrWhiteSpace($TargetDomain)) {
         Write-Host "Import cancelled. Target domain cannot be empty." -ForegroundColor Red
@@ -226,7 +226,7 @@ There is no automated 'un-import' rollback tool in this workflow.
 Write-Log -Message "Displayed critical backup requirement warning before import." -Level WARN
 
 $backupConfirm = [Microsoft.VisualBasic.Interaction]::InputBox("Type YES to confirm you have a verified domain backup/snapshot and want to continue import.", "Backup Confirmation Required", "")
-if ($backupConfirm.Trim().ToUpperInvariant() -ne 'YES') {
+if ([string]::IsNullOrWhiteSpace($backupConfirm) -or $backupConfirm.Trim().ToUpperInvariant() -ne 'YES') {
     Write-Host "Import cancelled. Backup confirmation was not provided." -ForegroundColor Yellow
     Write-Log -Message "Import orchestrator cancelled: backup confirmation was not provided." -Level WARN
     exit

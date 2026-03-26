@@ -205,6 +205,8 @@ function Set-TargetOUColumnEditor {
     $ouCol.DataPropertyName = 'TargetOU_DN'
     $ouCol.HeaderText = 'TargetOU_DN'
     $ouCol.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $ouCol.MinimumWidth = 250
+    $ouCol.DropDownWidth = 500
     $ouCol.AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
     $ouCol.DefaultCellStyle.BackColor = [System.Drawing.Color]::LightYellow
     $ouCol.Items.AddRange([string[]]($targetValues | Sort-Object))
@@ -389,6 +391,7 @@ function Import-CsvToGrid ($fileName, $tabName) {
     
     # Ensure TargetOU_DN takes up remaining space
     if ($dgv.Columns.Contains("TargetOU_DN")) {
+        $dgv.Columns["TargetOU_DN"].MinimumWidth = 250
         $dgv.Columns["TargetOU_DN"].AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
     }
 

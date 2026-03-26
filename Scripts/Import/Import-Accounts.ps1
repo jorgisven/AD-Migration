@@ -188,7 +188,7 @@ if ($usersToCreate.Count -gt 0) {
             $displayName = if ($srcUser -and $srcUser.DisplayName) { [string]$srcUser.DisplayName } else { '' }
             $sam = if ([string]::IsNullOrWhiteSpace($u.TargetSam)) { [string]$u.SourceSam } else { [string]$u.TargetSam }
 
-            $check = Test-DefaultPasswordCandidate -Password $candidateText -SamAccountName $sam -GivenName $givenName -Surname $surname -DisplayName $displayName -MinPasswordLength $minPasswordLength -ComplexityEnabled $complexityEnabled
+            $check = Test-DefaultPasswordCandidate -Password $candidateSecure -SamAccountName $sam -GivenName $givenName -Surname $surname -DisplayName $displayName -MinPasswordLength $minPasswordLength -ComplexityEnabled $complexityEnabled
             if (-not $check.IsValid) {
                 $problemUsers += [PSCustomObject]@{
                     Sam     = $sam
@@ -243,7 +243,7 @@ Invoke-Safely -ScriptBlock {
         $targetOU = $u.TargetOU_DN
         $upn = "$targetSam@$TargetDomain"
 
-        $existingUser = Get-ADUser -Identity $targetSam -Server $TargetDomain -ErrorAction SilentlyContinue
+        $existingUser = Get-ADUser -Filter { SamAccountName -eq $targetSam } -Server $TargetDomain -ErrorAction SilentlyContinue
         if ($existingUser) {
             $skippedExistingUserCount++
             Write-Log -Message "Idempotency skip: User '$targetSam' already exists in target domain. Creation skipped." -Level WARN
@@ -271,7 +271,7 @@ Invoke-Safely -ScriptBlock {
         }
 
         try {
-            if ($PSCmdlet.ShouldProcess($targetSam, "Create User in $targetOU")) {
+            if ($PSCmdlet.ShouldProcess($targetSam, "Create User in $targetOU") -and -not $WhatIfPreference) {
                 New-ADUser @userParams -ErrorAction Stop
                 Write-Log -Message "Created User: $targetSam" -Level INFO
                 $createdUserCount++
@@ -297,7 +297,7 @@ Invoke-Safely -ScriptBlock {
         $targetName = $c.TargetName
         $targetOU = $c.TargetOU_DN
 
-        $existingComputer = Get-ADComputer -Identity $targetName -Server $TargetDomain -ErrorAction SilentlyContinue
+        $existingComputer = Get-ADComputer -Filter { Name -eq $targetName } -Server $TargetDomain -ErrorAction SilentlyContinue
         if ($existingComputer) {
             $skippedExistingComputerCount++
             Write-Log -Message "Idempotency skip: Computer '$targetName' already exists in target domain. Creation skipped." -Level WARN
@@ -314,7 +314,7 @@ Invoke-Safely -ScriptBlock {
         if ($c.Description) { $compParams.Description = $c.Description }
 
         try {
-            if ($PSCmdlet.ShouldProcess($targetName, "Create Computer in $targetOU")) {
+            if ($PSCmdlet.ShouldProcess($targetName, "Create Computer in $targetOU") -and -not $WhatIfPreference) {
                 New-ADComputer @compParams -ErrorAction Stop
                 Write-Log -Message "Created Computer: $targetName" -Level INFO
                 $createdComputerCount++
@@ -341,7 +341,7 @@ Invoke-Safely -ScriptBlock {
         $targetSam = $g.TargetSam
         $targetOU = $g.TargetOU_DN
 
-        $existingGroup = Get-ADGroup -Identity $targetSam -Server $TargetDomain -ErrorAction SilentlyContinue
+        $existingGroup = Get-ADGroup -Filter { SamAccountName -eq $targetSam } -Server $TargetDomain -ErrorAction SilentlyContinue
         if ($existingGroup) {
             $skippedExistingGroupCount++
             Write-Log -Message "Idempotency skip: Group '$targetSam' already exists in target domain. Creation skipped." -Level WARN
@@ -361,7 +361,7 @@ Invoke-Safely -ScriptBlock {
         if ($srcGroup -and $srcGroup.Description) { $grpParams.Description = $srcGroup.Description }
 
         try {
-            if ($PSCmdlet.ShouldProcess($targetSam, "Create Group in $targetOU")) {
+            if ($PSCmdlet.ShouldProcess($targetSam, "Create Group in $targetOU") -and -not $WhatIfPreference) {
                 New-ADGroup @grpParams -ErrorAction Stop
                 Write-Log -Message "Created Group: $targetSam" -Level INFO
                 $createdGroupCount++
@@ -409,7 +409,7 @@ Invoke-Safely -ScriptBlock {
             if ($tgtGroup -and $tgtMember) {
                 try {
                     # Check if they are actually mapped to be migrated/merged
-                    if ($PSCmdlet.ShouldProcess("Add $tgtMember to $tgtGroup", "Group Membership")) {
+                    if ($PSCmdlet.ShouldProcess("Add $tgtMember to $tgtGroup", "Group Membership") -and -not $WhatIfPreference) {
                         # Use SilentlyContinue to ignore "Already a member" errors gracefully
                         Add-ADGroupMember -Identity $tgtGroup -Members $tgtMember -Server $TargetDomain -ErrorAction SilentlyContinue
                         $addedCount++

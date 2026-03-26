@@ -95,6 +95,14 @@ if ([string]::IsNullOrWhiteSpace($TargetServer)) {
 
 Write-Log -Message "Starting DNS Import to Server: $TargetServer" -Level INFO
 
+$dnsWarningMsg = "WARNING: You are about to import DNS zones and records into the target domain.`n`nIf the source and target domains operate on the same physical network or routable subnets, importing identical A/CNAME records could cause severe IP conflicts or routing issues.`n`nHave you verified your DNS transformation strategy and are you sure you want to proceed?"
+$dnsWarningResult = [System.Windows.Forms.MessageBox]::Show($dnsWarningMsg, "DNS IP Conflict Warning", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+
+if ($dnsWarningResult -eq 'No') {
+    Write-Log -Message "DNS Import cancelled by user at IP conflict warning." -Level WARN
+    throw "DNS Import cancelled by user due to potential IP conflicts."
+}
+
 # Global conflict preferences (Prompt, Overwrite, Skip)
 $GlobalZoneAction = "Prompt"
 $GlobalRecordAction = "Prompt"
