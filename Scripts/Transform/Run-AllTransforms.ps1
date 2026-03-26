@@ -197,13 +197,13 @@ try {
 
     # Optional: Policy Analyzer Integration
     $analyzerMsg = @"
-Would you like to execute the automated GPO Conflict Validation script before proceeding?
+Would you like to run the optional GPO conflict review before proceeding?
 
-This step is highly recommended to catch conflicting or duplicate settings across your mapped GPOs before import.
+This step launches Validation-GPOConflicts.ps1, which opens Microsoft Policy Analyzer and loads your exported GPO backups for visual comparison.
 
-Note: For a more comprehensive visual review, you can optionally download the Microsoft Policy Analyzer (Security Compliance Toolkit) from: https://aka.ms/sct
+If Policy Analyzer is not installed, you will be prompted to locate PolicyAnalyzer.exe (download from https://aka.ms/sct).
 
-Click YES to run the Validation-GPOConflicts.ps1 script.
+Click YES to launch Policy Analyzer via Validation-GPOConflicts.ps1.
 Click NO to skip this check and continue to the next step.
 "@
     $analyzerResult = [System.Windows.Forms.MessageBox]::Show($analyzerMsg, "Check GPO Conflicts", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)

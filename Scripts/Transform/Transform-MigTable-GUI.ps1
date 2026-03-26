@@ -27,8 +27,68 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Data
 Add-Type -AssemblyName System.Xml
+try { Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction Stop } catch { }
 
 [xml]$script:migXml = Get-Content $MigTablePath
+
+function Get-UserInputText {
+    param(
+        [string]$Prompt,
+        [string]$Title,
+        [string]$DefaultText = ""
+    )
+
+    $interactionType = [Type]::GetType('Microsoft.VisualBasic.Interaction, Microsoft.VisualBasic', $false)
+    if ($null -ne $interactionType) {
+        return [Microsoft.VisualBasic.Interaction]::InputBox($Prompt, $Title, $DefaultText)
+    }
+
+    # Fallback text prompt if Microsoft.VisualBasic is unavailable
+    $inputForm = New-Object System.Windows.Forms.Form
+    $inputForm.Text = $Title
+    $inputForm.Size = New-Object System.Drawing.Size(560, 165)
+    $inputForm.StartPosition = 'CenterParent'
+    $inputForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $inputForm.MaximizeBox = $false
+    $inputForm.MinimizeBox = $false
+
+    $lblPrompt = New-Object System.Windows.Forms.Label
+    $lblPrompt.Text = $Prompt
+    $lblPrompt.AutoSize = $false
+    $lblPrompt.Size = New-Object System.Drawing.Size(520, 36)
+    $lblPrompt.Location = New-Object System.Drawing.Point(12, 10)
+    $inputForm.Controls.Add($lblPrompt)
+
+    $txtInput = New-Object System.Windows.Forms.TextBox
+    $txtInput.Text = $DefaultText
+    $txtInput.Size = New-Object System.Drawing.Size(520, 22)
+    $txtInput.Location = New-Object System.Drawing.Point(12, 50)
+    $inputForm.Controls.Add($txtInput)
+
+    $btnOk = New-Object System.Windows.Forms.Button
+    $btnOk.Text = 'OK'
+    $btnOk.Size = New-Object System.Drawing.Size(90, 28)
+    $btnOk.Location = New-Object System.Drawing.Point(350, 85)
+    $btnOk.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $inputForm.Controls.Add($btnOk)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = 'Cancel'
+    $btnCancel.Size = New-Object System.Drawing.Size(90, 28)
+    $btnCancel.Location = New-Object System.Drawing.Point(442, 85)
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $inputForm.Controls.Add($btnCancel)
+
+    $inputForm.AcceptButton = $btnOk
+    $inputForm.CancelButton = $btnCancel
+
+    $dialogResult = $inputForm.ShowDialog()
+    if ($dialogResult -eq [System.Windows.Forms.DialogResult]::OK) {
+        return $txtInput.Text
+    }
+
+    return ''
+}
 
 # --- GUI SETUP ---
 
@@ -116,18 +176,18 @@ $dgv.BringToFront()
 # Highlight SYSVOL paths for visibility
 # Highlight SYSVOL paths for visibility and empty Destinations for validation errors
 $dgv.Add_CellFormatting({
-    param($sender, $e)
+    param($grid, $e)
     if ($e.RowIndex -lt 0) { return }
 
-    if ($sender.Columns[$e.ColumnIndex].Name -eq "Source") {
-        $typeVal = $sender.Rows[$e.RowIndex].Cells["Type"].Value
+    if ($grid.Columns[$e.ColumnIndex].Name -eq "Source") {
+        $typeVal = $grid.Rows[$e.RowIndex].Cells["Type"].Value
         $srcVal = $e.Value
         if ($null -ne $srcVal -and $typeVal -eq "UNC Path" -and $srcVal -match "(?i)\\sysvol") {
             $e.CellStyle.BackColor = [System.Drawing.Color]::LightCyan
             $e.CellStyle.ForeColor = [System.Drawing.Color]::DarkBlue
         }
     }
-    if ($sender.Columns[$e.ColumnIndex].Name -eq "Destination") {
+    if ($grid.Columns[$e.ColumnIndex].Name -eq "Destination") {
         if ([string]::IsNullOrWhiteSpace($e.Value)) {
             $e.CellStyle.BackColor = [System.Drawing.Color]::Salmon
         }
@@ -160,7 +220,7 @@ $txtSearch.Add_TextChanged({
 })
 
 $btnSysvol.Add_Click({
-    $targetDomain = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the FQDN of the TARGET domain (e.g., target.local) to automatically translate SYSVOL paths:", "Auto-Map SYSVOL", "")
+    $targetDomain = Get-UserInputText -Prompt "Enter the FQDN of the TARGET domain (e.g., target.local) to automatically translate SYSVOL paths:" -Title "Auto-Map SYSVOL" -DefaultText ""
     if ([string]::IsNullOrWhiteSpace($targetDomain)) { return }
 
     $updated = 0
@@ -182,19 +242,26 @@ $btnSysvol.Add_Click({
 
 $btnSave.Add_Click({
     $dgv.EndEdit()
-    foreach ($row in $dt.Rows) {
+    for ($i = 0; $i -lt $dt.Rows.Count; $i++) {
+        $row = $dt.Rows[$i]
         $destVal = if ($row["Destination"] -is [System.DBNull]) { "" } else { [string]$row["Destination"] }
-        foreach ($m in $mappings) {
-            $mType = if ($m.Source.GetAttribute("xsi:type")) { $m.Source.GetAttribute("xsi:type") } else { $m.Source.GetAttribute("type", "http://www.w3.org/2001/XMLSchema-instance") }
-            if ($row["Type"] -eq "Security Principal" -and $mType -eq "GPMTrustee" -and $m.Source.GetAttribute("Name") -eq $row["Source"]) { $m.Destination.SetAttribute("Name", $row["Destination"]); break }
-            if ($row["Type"] -eq "UNC Path" -and $mType -eq "GPMPath" -and $m.Source.GetAttribute("Path") -eq $row["Source"]) { $m.Destination.SetAttribute("Path", $row["Destination"]); break }
-            if ($row["Type"] -eq "Security Principal" -and $mType -eq "GPMTrustee" -and $m.Source.GetAttribute("Name") -eq $row["Source"]) { $m.Destination.SetAttribute("Name", $destVal); break }
-            if ($row["Type"] -eq "UNC Path" -and $mType -eq "GPMPath" -and $m.Source.GetAttribute("Path") -eq $row["Source"]) { $m.Destination.SetAttribute("Path", $destVal); break }
+        $mappingNode = $mappings.Item($i)
+        if ($null -eq $mappingNode) { continue }
+
+        if ($row["Type"] -eq "Security Principal") {
+            $mappingNode.Destination.SetAttribute("Name", $destVal)
+        } else {
+            $mappingNode.Destination.SetAttribute("Path", $destVal)
         }
     }
-    $script:migXml.Save($MigTablePath)
-    [System.Windows.Forms.MessageBox]::Show("Migration Table saved successfully.", "Save Complete", "OK", "Information")
-    $form.Close()
+
+    try {
+        $script:migXml.Save($MigTablePath)
+        [System.Windows.Forms.MessageBox]::Show("Migration Table saved successfully.", "Save Complete", "OK", "Information")
+        $form.Close()
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to save Migration Table.`n`n$($_.Exception.Message)", "Save Failed", "OK", "Error") | Out-Null
+    }
 })
 
 $form.ShowDialog() | Out-Null

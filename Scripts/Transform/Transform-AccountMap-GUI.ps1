@@ -15,11 +15,13 @@ Import-Module $ModulePath -Force
 
 $config = Get-ADMigrationConfig
 $MapPath = Join-Path $config.TransformRoot 'Mapping'
+$SourceSecurityPath = Join-Path $config.ExportRoot 'Security'
 
 # Load Assemblies
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Data
+try { Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction Stop } catch { }
 
 # --- GUI SETUP ---
 
@@ -55,6 +57,12 @@ $btnSearchClear.Location = New-Object System.Drawing.Point(370, 9)
 $btnSearchClear.Width = 60
 $panelTop.Controls.Add($btnSearchClear)
 
+$btnLoadTargetOUs = New-Object System.Windows.Forms.Button
+$btnLoadTargetOUs.Text = "Load Target OUs"
+$btnLoadTargetOUs.Location = New-Object System.Drawing.Point(440, 9)
+$btnLoadTargetOUs.Width = 130
+$panelTop.Controls.Add($btnLoadTargetOUs)
+
 # Bottom Panel (Buttons)
 $panelBottom = New-Object System.Windows.Forms.Panel
 $panelBottom.Height = 50
@@ -80,6 +88,152 @@ $tabCtrl.BringToFront()
 
 $script:grids = @{}
 $script:saveErrorCount = 0
+$script:targetOUs = @()
+$script:explicitKeepGroups = @{}
+$script:protectedDefaultGroupNames = @(
+    'Domain Admins',
+    'Domain Controllers',
+    'Schema Admins',
+    'Enterprise Admins',
+    'Group Policy Creator Owners',
+    'Read-only Domain Controllers',
+    'Cloneable Domain Controllers',
+    'Protected Users',
+    'Key Admins',
+    'Enterprise Key Admins'
+)
+
+$latestMembers = Get-ChildItem -Path $SourceSecurityPath -Filter "GroupMembers_*.csv" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($latestMembers) {
+    try {
+        Import-Csv $latestMembers.FullName | ForEach-Object {
+            if (-not [string]::IsNullOrWhiteSpace($_.GroupSam)) {
+                $script:explicitKeepGroups[[string]$_.GroupSam] = $true
+            }
+        }
+    } catch {
+        Write-Host "[!] WARNING: Failed to load explicit privileged membership keeps from $($latestMembers.FullName): $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+function Get-UserInputText {
+    param(
+        [string]$Prompt,
+        [string]$Title,
+        [string]$DefaultText = ""
+    )
+
+    $interactionType = [Type]::GetType('Microsoft.VisualBasic.Interaction, Microsoft.VisualBasic', $false)
+    if ($null -ne $interactionType) {
+        return [Microsoft.VisualBasic.Interaction]::InputBox($Prompt, $Title, $DefaultText)
+    }
+
+    $inputForm = New-Object System.Windows.Forms.Form
+    $inputForm.Text = $Title
+    $inputForm.Size = New-Object System.Drawing.Size(560, 165)
+    $inputForm.StartPosition = 'CenterParent'
+    $inputForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $inputForm.MaximizeBox = $false
+    $inputForm.MinimizeBox = $false
+
+    $lblPrompt = New-Object System.Windows.Forms.Label
+    $lblPrompt.Text = $Prompt
+    $lblPrompt.AutoSize = $false
+    $lblPrompt.Size = New-Object System.Drawing.Size(520, 36)
+    $lblPrompt.Location = New-Object System.Drawing.Point(12, 10)
+    $inputForm.Controls.Add($lblPrompt)
+
+    $txtInput = New-Object System.Windows.Forms.TextBox
+    $txtInput.Text = $DefaultText
+    $txtInput.Size = New-Object System.Drawing.Size(520, 22)
+    $txtInput.Location = New-Object System.Drawing.Point(12, 50)
+    $inputForm.Controls.Add($txtInput)
+
+    $btnOk = New-Object System.Windows.Forms.Button
+    $btnOk.Text = 'OK'
+    $btnOk.Size = New-Object System.Drawing.Size(90, 28)
+    $btnOk.Location = New-Object System.Drawing.Point(350, 85)
+    $btnOk.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $inputForm.Controls.Add($btnOk)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = 'Cancel'
+    $btnCancel.Size = New-Object System.Drawing.Size(90, 28)
+    $btnCancel.Location = New-Object System.Drawing.Point(442, 85)
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $inputForm.Controls.Add($btnCancel)
+
+    $inputForm.AcceptButton = $btnOk
+    $inputForm.CancelButton = $btnCancel
+
+    $dialogResult = $inputForm.ShowDialog()
+    if ($dialogResult -eq [System.Windows.Forms.DialogResult]::OK) {
+        return $txtInput.Text
+    }
+    return ''
+}
+
+function Set-TargetOUColumnEditor {
+    param([System.Windows.Forms.DataGridView]$Grid)
+
+    if ($null -eq $Grid -or -not $Grid.Columns.Contains('TargetOU_DN')) { return }
+
+    $dt = $Grid.DataSource
+    $targetValues = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($ou in $script:targetOUs) {
+        if (-not [string]::IsNullOrWhiteSpace($ou)) { [void]$targetValues.Add([string]$ou) }
+    }
+
+    if ($null -ne $dt -and $dt.Columns.Contains('TargetOU_DN')) {
+        foreach ($r in $dt.Rows) {
+            $existing = [string]$r['TargetOU_DN']
+            if (-not [string]::IsNullOrWhiteSpace($existing)) { [void]$targetValues.Add($existing) }
+        }
+    }
+
+    if ($targetValues.Count -eq 0) { return }
+
+    $colIndex = $Grid.Columns['TargetOU_DN'].Index
+    $Grid.Columns.Remove('TargetOU_DN')
+
+    $ouCol = New-Object System.Windows.Forms.DataGridViewComboBoxColumn
+    $ouCol.Name = 'TargetOU_DN'
+    $ouCol.DataPropertyName = 'TargetOU_DN'
+    $ouCol.HeaderText = 'TargetOU_DN'
+    $ouCol.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $ouCol.AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
+    $ouCol.DefaultCellStyle.BackColor = [System.Drawing.Color]::LightYellow
+    $ouCol.Items.AddRange([string[]]($targetValues | Sort-Object))
+
+    $Grid.Columns.Insert($colIndex, $ouCol)
+}
+
+function Get-TargetOUs {
+    if (-not (Get-Command Get-ADOrganizationalUnit -ErrorAction SilentlyContinue)) {
+        [System.Windows.Forms.MessageBox]::Show("Active Directory cmdlets are not available on this system. Install RSAT/ActiveDirectory module to load target OUs.", "AD Cmdlets Missing", "OK", "Warning") | Out-Null
+        return
+    }
+
+    $targetDomain = Get-UserInputText -Prompt "Enter the target domain FQDN or DC hostname to query OUs (e.g., target.local):" -Title "Load Target OUs" -DefaultText ""
+    if ([string]::IsNullOrWhiteSpace($targetDomain)) { return }
+
+    try {
+        $rootDse = Get-ADRootDSE -Server $targetDomain -ErrorAction Stop
+        $baseDn = $rootDse.defaultNamingContext
+        $script:targetOUs = @(Get-ADOrganizationalUnit -Filter * -SearchBase $baseDn -Server $targetDomain -ErrorAction Stop |
+            Select-Object -ExpandProperty DistinguishedName |
+            Sort-Object -Unique)
+
+        foreach ($gridPath in $script:grids.Keys) {
+            Set-TargetOUColumnEditor -Grid $script:grids[$gridPath]
+        }
+
+        [System.Windows.Forms.MessageBox]::Show("Loaded $($script:targetOUs.Count) target OUs from '$targetDomain'. TargetOU_DN now uses a dropdown list.", "Target OUs Loaded", "OK", "Information") | Out-Null
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to load target OUs from '$targetDomain'.`n`n$($_.Exception.Message)", "Load Target OUs Failed", "OK", "Error") | Out-Null
+    }
+}
 
 function Import-CsvToGrid ($fileName, $tabName) {
     $csvPath = Join-Path $MapPath $fileName
@@ -112,6 +266,44 @@ function Import-CsvToGrid ($fileName, $tabName) {
         foreach ($prop in $props) {
             $dr[$prop] = $row.$prop
         }
+
+        # Ensure built-in principals are clearly marked and skipped by default.
+        $sourceDN = if ($dt.Columns.Contains('SourceDN')) { [string]$dr['SourceDN'] } else { '' }
+        $sourceSam = if ($dt.Columns.Contains('SourceSam')) { [string]$dr['SourceSam'] } else { '' }
+        $sourceName = if ($dt.Columns.Contains('SourceName')) { [string]$dr['SourceName'] } else { '' }
+        $actionVal = if ($dt.Columns.Contains('Action')) { [string]$dr['Action'] } else { '' }
+        $isBuiltinPrincipal = $false
+        $isProtectedDefaultGroup = $false
+        $hasExplicitKeep = $script:explicitKeepGroups.ContainsKey($sourceSam) -or $script:explicitKeepGroups.ContainsKey($sourceName)
+        if ($sourceDN -match '(?:^|,)CN=Builtin,') { $isBuiltinPrincipal = $true }
+        if ($sourceSam -eq 'System Managed Accounts Group' -or $sourceName -eq 'System Managed Accounts Group') { $isBuiltinPrincipal = $true }
+        if ($sourceSam -eq 'DefaultAccount' -or $sourceName -eq 'DefaultAccount') { $isBuiltinPrincipal = $true }
+        if ($script:protectedDefaultGroupNames -contains $sourceSam -or $script:protectedDefaultGroupNames -contains $sourceName) { $isProtectedDefaultGroup = $true }
+        $shouldForceSafeDefault = [string]::IsNullOrWhiteSpace($actionVal) -or $actionVal -eq 'Create'
+
+        if ($hasExplicitKeep -and ($isBuiltinPrincipal -or $isProtectedDefaultGroup)) {
+            if ($isBuiltinPrincipal -and $dt.Columns.Contains('TargetOU_DN')) { $dr['TargetOU_DN'] = 'BUILTIN (Do not move)' }
+            if ($isProtectedDefaultGroup -and $dt.Columns.Contains('TargetOU_DN')) { $dr['TargetOU_DN'] = 'SYSTEM DEFAULT GROUP (Do not move)' }
+            if ($dt.Columns.Contains('Action')) { $dr['Action'] = 'Merge' }
+            if ($dt.Columns.Contains('Notes') -and [string]::IsNullOrWhiteSpace([string]$dr['Notes'])) {
+                $dr['Notes'] = 'Privileged membership was explicitly preserved during export. Action set to Merge.'
+            }
+            $principalName = if (-not [string]::IsNullOrWhiteSpace($sourceSam)) { $sourceSam } else { $sourceName }
+            Write-Log -Message "Account Mapper override applied for '$principalName': explicit privileged membership keep detected; Action forced to Merge." -Level WARN
+        } elseif ($isBuiltinPrincipal -and $shouldForceSafeDefault) {
+            if ($dt.Columns.Contains('TargetOU_DN')) { $dr['TargetOU_DN'] = 'BUILTIN (Do not move)' }
+            if ($dt.Columns.Contains('Action')) { $dr['Action'] = 'Skip' }
+            if ($dt.Columns.Contains('Notes') -and [string]::IsNullOrWhiteSpace([string]$dr['Notes'])) {
+                $dr['Notes'] = 'Built-in principal. Action set to Skip.'
+            }
+        } elseif ($isProtectedDefaultGroup -and $shouldForceSafeDefault) {
+            if ($dt.Columns.Contains('TargetOU_DN')) { $dr['TargetOU_DN'] = 'SYSTEM DEFAULT GROUP (Do not move)' }
+            if ($dt.Columns.Contains('Action')) { $dr['Action'] = 'Skip' }
+            if ($dt.Columns.Contains('Notes') -and [string]::IsNullOrWhiteSpace([string]$dr['Notes'])) {
+                $dr['Notes'] = 'Protected default domain group. Action set to Skip.'
+            }
+        }
+
         # If the row's SourceDN parent OU was skipped, set TargetOU_DN to warning
         if ($dt.Columns.Contains('SourceDN') -and $dt.Columns.Contains('TargetOU_DN')) {
             $parentDN = $dr['SourceDN'] -replace '^[^,]+,', ''
@@ -136,8 +328,7 @@ function Import-CsvToGrid ($fileName, $tabName) {
 
     # --- COPY/PASTE SUPPORT ---
     $dgv.Add_KeyDown({
-        param($sender, $e)
-        $grid = $sender
+        param($grid, $e)
         if ($e.Control -and $e.KeyCode -eq 'C') {
             # Copy selected cell(s) to clipboard
             $sb = New-Object System.Text.StringBuilder
@@ -197,6 +388,9 @@ function Import-CsvToGrid ($fileName, $tabName) {
     if ($dgv.Columns.Contains("TargetOU_DN")) {
         $dgv.Columns["TargetOU_DN"].AutoSizeMode = [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::Fill
     }
+
+    # If target OUs have been loaded, present TargetOU_DN as a dropdown.
+    Set-TargetOUColumnEditor -Grid $dgv
 
     # --- HIGHLIGHT INVALID ACCOUNTS ---
     $invalidRows = @()
@@ -323,6 +517,7 @@ $txtSearch.Add_TextChanged({
 })
 
 $btnSearchClear.Add_Click({ $txtSearch.Text = "" })
+$btnLoadTargetOUs.Add_Click({ Get-TargetOUs })
 
 # --- SHOW ---
 $form.ShowDialog() | Out-Null

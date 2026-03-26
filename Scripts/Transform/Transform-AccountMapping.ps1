@@ -35,6 +35,7 @@ Write-Log -Message "Loaded ADMigration module from $ModulePath" -Level INFO
 $config = Get-ADMigrationConfig
 $SourceSecurityPath = Join-Path $config.ExportRoot 'Security'
 $MapPath = Join-Path $config.TransformRoot 'Mapping'
+$ExplicitMembershipKeepGroups = @{}
 
 # Ensure transform directory exists
 if (-not (Test-Path $MapPath)) { New-Item -ItemType Directory -Path $MapPath -Force | Out-Null }
@@ -53,6 +54,21 @@ if (Test-Path $ouMapFile) {
         }
     }
     Write-Log -Message "Loaded $($OUMap.Count) mapped OUs for account placement." -Level INFO
+}
+
+# Load explicitly preserved privileged memberships from Export-AccountData selection.
+$memberFile = Get-ChildItem -Path $SourceSecurityPath -Filter "GroupMembers_*.csv" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($memberFile) {
+    try {
+        Import-Csv $memberFile.FullName | ForEach-Object {
+            if (-not [string]::IsNullOrWhiteSpace($_.GroupSam)) {
+                $ExplicitMembershipKeepGroups[[string]$_.GroupSam] = $true
+            }
+        }
+        Write-Log -Message "Loaded explicit privileged membership keeps for $($ExplicitMembershipKeepGroups.Count) group(s) from $($memberFile.Name)." -Level INFO
+    } catch {
+        Write-Log -Message "Failed loading explicit privileged membership keeps from $($memberFile.FullName): $_" -Level WARN
+    }
 }
 
 Invoke-Safely -ScriptBlock {
@@ -78,7 +94,35 @@ Invoke-Safely -ScriptBlock {
         $builtinSidPatterns = @(
             'S-1-5-.*-500$', # Administrator
             'S-1-5-.*-501$', # Guest
-            'S-1-5-.*-502$'  # krbtgt
+            'S-1-5-.*-502$', # krbtgt
+            'S-1-5-.*-503$', # DefaultAccount
+            '^S-1-5-32-\d+$' # Builtin local/domain alias groups (e.g., System Managed Accounts Group)
+        )
+
+        # Protected default domain groups should be treated as system groups and skipped by default.
+        $protectedDefaultGroupSidPatterns = @(
+            'S-1-5-.*-512$', # Domain Admins
+            'S-1-5-.*-516$', # Domain Controllers
+            'S-1-5-.*-518$', # Schema Admins
+            'S-1-5-.*-519$', # Enterprise Admins
+            'S-1-5-.*-520$', # Group Policy Creator Owners
+            'S-1-5-.*-521$', # Read-only Domain Controllers
+            'S-1-5-.*-522$', # Cloneable Domain Controllers
+            'S-1-5-.*-525$', # Protected Users
+            'S-1-5-.*-526$', # Key Admins
+            'S-1-5-.*-527$'  # Enterprise Key Admins
+        )
+        $protectedDefaultGroupNames = @(
+            'Domain Admins',
+            'Domain Controllers',
+            'Schema Admins',
+            'Enterprise Admins',
+            'Group Policy Creator Owners',
+            'Read-only Domain Controllers',
+            'Cloneable Domain Controllers',
+            'Protected Users',
+            'Key Admins',
+            'Enterprise Key Admins'
         )
 
         foreach ($item in $items) {
@@ -89,6 +133,7 @@ Invoke-Safely -ScriptBlock {
             $sam = if ($item.SamAccountName) { $item.SamAccountName } elseif ($item.Name) { $item.Name } else { "UNKNOWN" }
             $sid = $item.SID
             $targetName = $sam
+            $sourceDN = if ($item.DistinguishedName) { $item.DistinguishedName } else { "" }
             
             # --- BUILT-IN ACCOUNT DETECTION ---
             $isBuiltin = $false
@@ -98,6 +143,26 @@ Invoke-Safely -ScriptBlock {
                     break
                 }
             }
+            if (-not $isBuiltin -and $sourceDN -match "(?:^|,)CN=Builtin,") {
+                $isBuiltin = $true
+            }
+            if (-not $isBuiltin -and $sam -eq 'DefaultAccount') {
+                $isBuiltin = $true
+            }
+
+            $isProtectedDefaultGroup = $false
+            if ($ObjectType -eq 'Group') {
+                foreach ($pattern in $protectedDefaultGroupSidPatterns) {
+                    if ($sid -match $pattern) {
+                        $isProtectedDefaultGroup = $true
+                        break
+                    }
+                }
+                if (-not $isProtectedDefaultGroup -and $protectedDefaultGroupNames -contains $sam) {
+                    $isProtectedDefaultGroup = $true
+                }
+            }
+            $hasExplicitMembershipKeep = ($ObjectType -eq 'Group' -and $ExplicitMembershipKeepGroups.ContainsKey($sam))
 
             # Computers usually have a trailing $ in SamAccountName, strip it for Name matching
             if ($ObjectType -eq 'Computer' -and $targetName -match '\$$') {
@@ -105,7 +170,6 @@ Invoke-Safely -ScriptBlock {
             }
 
             # Determine Target OU
-            $sourceDN = if ($item.DistinguishedName) { $item.DistinguishedName } else { "" }
             $parentDN = $sourceDN -replace '^[^,]+,', ''
 
             # Skip objects located in the Domain Controllers OU (including child OUs)
@@ -114,6 +178,7 @@ Invoke-Safely -ScriptBlock {
             }
             # Only set targetOU from map if it wasn't already set by built-in logic
             $targetOU = if ($isBuiltin) { 'BUILTIN (Do not move)' }
+                        elseif ($isProtectedDefaultGroup) { 'SYSTEM DEFAULT GROUP (Do not move)' }
                         elseif ($OUMap.ContainsKey($parentDN)) { $OUMap[$parentDN] } 
                         else { "" }
 
@@ -129,8 +194,31 @@ Invoke-Safely -ScriptBlock {
             }
 
             if ($isBuiltin) {
-                $action = "Skip" # Always skip built-in accounts by default
-                $notes = "Built-in principal. Action set to Skip."
+                if ($hasExplicitMembershipKeep -and $exists) {
+                    $action = "Merge"
+                    $notes = "Built-in principal with explicitly preserved membership from export. Action set to Merge."
+                    Write-Log -Message "Override applied for built-in principal '$sam': explicit privileged membership keep detected; Action forced to Merge." -Level WARN
+                } elseif ($hasExplicitMembershipKeep -and -not $exists) {
+                    $action = "Skip"
+                    $notes = "Built-in principal has explicitly preserved membership, but target group was not found. Manual review required."
+                    Write-Log -Message "Explicit keep could not be honored for built-in principal '$sam': target group not found in '$TargetDomain'; Action remains Skip." -Level WARN
+                } else {
+                    $action = "Skip" # Always skip built-in accounts by default
+                    $notes = "Built-in principal. Action set to Skip."
+                }
+            } elseif ($isProtectedDefaultGroup) {
+                if ($hasExplicitMembershipKeep -and $exists) {
+                    $action = "Merge"
+                    $notes = "Protected default domain group with explicitly preserved membership from export. Action set to Merge."
+                    Write-Log -Message "Override applied for protected default group '$sam': explicit privileged membership keep detected; Action forced to Merge." -Level WARN
+                } elseif ($hasExplicitMembershipKeep -and -not $exists) {
+                    $action = "Skip"
+                    $notes = "Protected default domain group has explicitly preserved membership, but target group was not found. Manual review required."
+                    Write-Log -Message "Explicit keep could not be honored for protected default group '$sam': target group not found in '$TargetDomain'; Action remains Skip." -Level WARN
+                } else {
+                    $action = "Skip"
+                    $notes = "Protected default domain group. Action set to Skip."
+                }
             } elseif ($exists) {
                 $action = "Merge"
                 $notes = "Exists in target domain. Defaulted to Merge."

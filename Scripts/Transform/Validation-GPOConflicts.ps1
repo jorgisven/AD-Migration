@@ -16,10 +16,12 @@ if (-not (Test-Path $BackupPath)) {
     throw "GPO Backup directory not found. Please run the Export phase first."
 }
 
+# This script is a launcher/wrapper for Microsoft Policy Analyzer.
+# It prompts for PolicyAnalyzer.exe and opens the exported GPO backup directory.
 # Ask the user where Policy Analyzer is located
 Add-Type -AssemblyName System.Windows.Forms
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
-$dialog.Title = "Select PolicyAnalyzer.exe (Download from https://aka.ms/sct)"
+$dialog.Title = "Select PolicyAnalyzer.exe to run GPO conflict review (Download from https://aka.ms/sct)"
 $dialog.Filter = "PolicyAnalyzer.exe|PolicyAnalyzer.exe"
 
 if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
@@ -31,5 +33,5 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
     # Passing the Backup directory as an argument automatically loads all GPOs into the tool
     Start-Process -FilePath $analyzerExe -ArgumentList "`"$BackupPath`"" -Wait
 } else {
-    Write-Host "Policy Analyzer launch cancelled." -ForegroundColor DarkGray
+    Write-Host "GPO conflict review skipped (Policy Analyzer was not selected)." -ForegroundColor DarkGray
 }

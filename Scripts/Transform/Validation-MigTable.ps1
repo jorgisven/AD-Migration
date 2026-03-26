@@ -48,9 +48,9 @@ foreach ($m in $xml.GetElementsByTagName("Mapping")) {
         } elseif ($srcType -eq "Source" -and $srcPath -match "SYSVOL|\\Domain Controllers\\") {
             $context = "Built-in/System Path: $srcPath"
         } elseif ($srcName) {
-            $context = "$srcType: $srcName"
+            $context = "${srcType}: $srcName"
         } elseif ($srcPath) {
-            $context = "$srcType Path: $srcPath"
+            $context = "${srcType} Path: $srcPath"
         } else {
             $context = "Unknown Source"
         }
