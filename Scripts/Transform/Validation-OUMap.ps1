@@ -77,7 +77,7 @@ foreach ($row in $OUMap) {
         }
 
     # Check for invalid characters in the OU name part
-        $ouName = ($row.TargetDN -split ",")[0] -replace "^OU=",""
+        $ouName = ($row.TargetDN -split '(?<!\\),')[0] -replace '^OU=','' -replace '\\,',','
     if ($ouName -match '[\\/:*?"<>|]') {
         Write-Host "[-] ERROR: Invalid characters in OU name for TargetDN '$($row.TargetDN)'" -ForegroundColor Red
         $hasErrors = $true
@@ -90,7 +90,7 @@ $orphans = @()
 foreach ($row in $OUMap) {
     if ($row.Action -eq 'Skip') { continue }
 
-    $parentDN = $row.TargetDN -replace "^[^,]+,", ""
+    $parentDN = $row.TargetDN -replace "^.*?(?<!\\),", ""
     
     if ($parentDN -ne $row.TargetDN -and $parentDN -notmatch "^DC=") {
         if (-not $validDNs.Contains($parentDN)) {
@@ -120,7 +120,7 @@ if ($onlineResult -eq 'Yes') {
         $anchorDNs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         foreach ($row in $OUMap) {
             if ($row.Action -eq 'Skip' -or [string]::IsNullOrWhiteSpace($row.TargetDN)) { continue }
-            $parentDN = $row.TargetDN -replace "^[^,]+,", ""
+            $parentDN = $row.TargetDN -replace "^.*?(?<!\\),", ""
             if (-not $validDNs.Contains($parentDN)) {
                 $anchorDNs.Add($parentDN) | Out-Null
             }

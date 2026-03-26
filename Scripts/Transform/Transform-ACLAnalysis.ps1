@@ -91,7 +91,7 @@ foreach ($ace in $ACLs) {
     }
 
     # Filter out boring default permissions (optional)
-    if ($status -ne "OK" -or $ace.IsInherited -eq $false) {
+    if ($status -ne "OK" -or $ace.IsInherited -eq 'False') {
         $AnalysisResults.Add([PSCustomObject]@{
             OU                    = $ace.DistinguishedName
             OriginalIdentity      = $identity

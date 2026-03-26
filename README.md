@@ -30,6 +30,7 @@ AD-Migration/
 |   |   `-- Run-AllExports.ps1
 |   |
 |   |-- Transform/              # Transform phase scripts
+|   |   |-- OU_Mapping_Workflow.md
 |   |   |-- Transform-OUMap.ps1
 |   |   |-- Transform-OUMap-GUI.ps1
 |   |   |-- Transform-AccountMapping.ps1
@@ -84,6 +85,7 @@ AD-Migration/
 |-- .github/
 |   `-- copilot-instructions.md # AI assistant context and patterns
 |
+|-- Start-MigrationGUI.ps1      # Central GUI orchestrator for all phases
 `-- README.md                   # This file
 ```
 
@@ -230,66 +232,6 @@ For example:
 ## 🚀 Quick Start
 ---
 
-## 🛠️ Troubleshooting
-
-### Module Import Fails / Cmdlets Not Found
-**Symptom:** `Import-Module` fails or `Get-Command -Module ADMigration` returns nothing.
-- **Cause:** RSAT or GPMC not installed, or wrong PowerShell version.
-- **Solution:**
-	- Install RSAT and GPMC (see Requirements section)
-	- Use PowerShell 5.1+ or 7+
-	- Restart your PowerShell session after installing new features
-
-### "Module manifest missing" or Path Errors
-**Symptom:** Script throws `Module manifest missing.` or cannot find files.
-- **Cause:** Running scripts from the wrong directory, or missing files after extracting/cloning.
-- **Solution:**
-	- Always run scripts from the project root or as shown in Quick Start
-	- Ensure all files are present after cloning/extracting
-
-### RSAT/GPMC Cmdlets Not Available
-**Symptom:** Errors like `Get-ADUser` or `Get-GPO` not recognized.
-- **Cause:** RSAT or GPMC not installed/enabled.
-- **Solution:**
-	- Run `Add-WindowsCapability -Online -Name "Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0"`
-	- Or enable via Windows Features/Optional Features
-
-### Permission Denied / Admin Rights Required
-**Symptom:** Script fails with access denied or prompts for admin rights.
-- **Cause:** Not running PowerShell as Administrator, or insufficient domain permissions.
-- **Solution:**
-	- Right-click PowerShell and select "Run as Administrator"
-	- Ensure you have the required domain permissions for the phase
-
-### Export/Import Script Fails Midway
-**Symptom:** Script aborts, error in console, or prompts to continue/abort.
-- **Cause:** Missing mapping files, validation errors, or environment issues.
-- **Solution:**
-	- Review the error message and logs in `%USERPROFILE%\Documents\ADMigration\Logs\`
-	- Fix mapping/CSV files as needed and retry
-	- Use the validation scripts to check for missing/invalid data
-
-### GUI Not Launching (Mapping/Transforms)
-**Symptom:** GUI scripts (e.g., OU/Account Mapper) do not open.
-- **Cause:** PowerShell execution policy, missing Windows Forms, or script path issues.
-- **Solution:**
-	- Set execution policy: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`
-	- Ensure you are running on Windows with .NET and Windows Forms support
-	- Run scripts from the correct directory
-
-### Validation Errors
-**Symptom:** Validation scripts fail or flag missing/invalid data.
-- **Cause:** Incomplete or incorrect mapping/CSV files.
-- **Solution:**
-	- Open the referenced CSV and correct errors
-	- Re-run the validation script until it passes
-
-### Log Files: Where to Find Details
-**Symptom:** Need to diagnose what happened in a previous run.
-- **Solution:**
-	- All logs are written to `%USERPROFILE%\Documents\ADMigration\Logs\YYYY-MM-DD.log`
-	- Review these logs for detailed error messages and script output
-
 ### 1. Prerequisites
 - **Windows Server or Workstation** with RSAT and GPMC installed
 - **PowerShell 5.1+** (or 7+)
@@ -364,6 +306,66 @@ All required export files should be present and non-empty.
 ### 8. Rollback (if needed)
 - If validation fails critically, delete created OUs/GPOs in the target, adjust mapping, and re-run import
 - See rollback guidance in the validation checklist
+
+## 🛠️ Troubleshooting
+
+### Module Import Fails / Cmdlets Not Found
+**Symptom:** `Import-Module` fails or `Get-Command -Module ADMigration` returns nothing.
+- **Cause:** RSAT or GPMC not installed, or wrong PowerShell version.
+- **Solution:**
+	- Install RSAT and GPMC (see Requirements section)
+	- Use PowerShell 5.1+ or 7+
+	- Restart your PowerShell session after installing new features
+
+### "Module manifest missing" or Path Errors
+**Symptom:** Script throws `Module manifest missing.` or cannot find files.
+- **Cause:** Running scripts from the wrong directory, or missing files after extracting/cloning.
+- **Solution:**
+	- Always run scripts from the project root or as shown in Quick Start
+	- Ensure all files are present after cloning/extracting
+
+### RSAT/GPMC Cmdlets Not Available
+**Symptom:** Errors like `Get-ADUser` or `Get-GPO` not recognized.
+- **Cause:** RSAT or GPMC not installed/enabled.
+- **Solution:**
+	- Run `Add-WindowsCapability -Online -Name "Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0"`
+	- Or enable via Windows Features/Optional Features
+
+### Permission Denied / Admin Rights Required
+**Symptom:** Script fails with access denied or prompts for admin rights.
+- **Cause:** Not running PowerShell as Administrator, or insufficient domain permissions.
+- **Solution:**
+	- Right-click PowerShell and select "Run as Administrator"
+	- Ensure you have the required domain permissions for the phase
+
+### Export/Import Script Fails Midway
+**Symptom:** Script aborts, error in console, or prompts to continue/abort.
+- **Cause:** Missing mapping files, validation errors, or environment issues.
+- **Solution:**
+	- Review the error message and logs in `%USERPROFILE%\Documents\ADMigration\Logs\`
+	- Fix mapping/CSV files as needed and retry
+	- Use the validation scripts to check for missing/invalid data
+
+### GUI Not Launching (Mapping/Transforms)
+**Symptom:** GUI scripts (e.g., OU/Account Mapper) do not open.
+- **Cause:** PowerShell execution policy, missing Windows Forms, or script path issues.
+- **Solution:**
+	- Set execution policy: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`
+	- Ensure you are running on Windows with .NET and Windows Forms support
+	- Run scripts from the correct directory
+
+### Validation Errors
+**Symptom:** Validation scripts fail or flag missing/invalid data.
+- **Cause:** Incomplete or incorrect mapping/CSV files.
+- **Solution:**
+	- Open the referenced CSV and correct errors
+	- Re-run the validation script until it passes
+
+### Log Files: Where to Find Details
+**Symptom:** Need to diagnose what happened in a previous run.
+- **Solution:**
+	- All logs are written to `%USERPROFILE%\Documents\ADMigration\Logs\YYYY-MM-DD.log`
+	- Review these logs for detailed error messages and script output
 
 ---
 
