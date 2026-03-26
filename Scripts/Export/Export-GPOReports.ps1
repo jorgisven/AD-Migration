@@ -71,7 +71,9 @@ try {
         Write-Log -Message "Found $($GPOs.Count) GPOs to export" -Level INFO
         
         $summaryFile = Join-Path $ExportPath "_GPO_Summary_${SourceDomain}_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        $backupStatusFile = Join-Path $BackupPath "_GPO_Backup_Status_${SourceDomain}_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
         $EmptyLinkedGPOs = @()
+        $BackupStatus = @()
         
         # Generate reports for each GPO
         $ReportSummary = foreach ($GPO in $GPOs) {
@@ -87,7 +89,28 @@ try {
                 Get-GPOReport -Guid $GPO.Id -ReportType Xml -Path $xmlPath -Server $SourceDomain
 
                 # Perform actual GPO Backup (Required for Import)
-                Backup-GPO -Guid $GPO.Id -Path $BackupPath -Server $SourceDomain | Out-Null
+                $backupSucceeded = $true
+                $backupError = ''
+                $backupErrorId = ''
+                $backupErrorCategory = ''
+                try {
+                    Backup-GPO -Guid $GPO.Id -Path $BackupPath -Server $SourceDomain -ErrorAction Stop | Out-Null
+                } catch {
+                    $backupSucceeded = $false
+                    $backupError = $_.Exception.Message
+                    $backupErrorId = $_.FullyQualifiedErrorId
+                    $backupErrorCategory = $_.CategoryInfo.Category
+                    Write-Log -Message "Backup failed for GPO '$($GPO.DisplayName)' (GUID: $($GPO.Id)) on domain '$SourceDomain'. Reason: $backupError | Category: $backupErrorCategory | ErrorId: $backupErrorId" -Level ERROR
+                }
+
+                $BackupStatus += [PSCustomObject]@{
+                    GPOName      = $GPO.DisplayName
+                    GPOID        = $GPO.Id
+                    BackupStatus = if ($backupSucceeded) { 'Succeeded' } else { 'Failed' }
+                    Error        = $backupError
+                    ErrorCategory = $backupErrorCategory
+                    ErrorId      = $backupErrorId
+                }
 
                 # Check if GPO is linked ONLY to empty OUs
                 [xml]$xmlData = Get-Content $xmlPath
@@ -118,6 +141,12 @@ try {
                 }
             } catch {
                 Write-Log -Message "Failed to process GPO '$($GPO.DisplayName)'. Error: $_" -Level WARN
+                $BackupStatus += [PSCustomObject]@{
+                    GPOName      = $GPO.DisplayName
+                    GPOID        = $GPO.Id
+                    BackupStatus = 'Failed'
+                    Error        = $_.Exception.Message
+                }
             }
         }
         
@@ -159,6 +188,17 @@ try {
 
         if ($ReportSummary) {
             $ReportSummary | Export-Csv -Path $summaryFile -NoTypeInformation -Encoding UTF8
+        }
+
+        if ($BackupStatus.Count -gt 0) {
+            $BackupStatus | Export-Csv -Path $backupStatusFile -NoTypeInformation -Encoding UTF8
+            Write-Log -Message "Exported GPO backup status report to $backupStatusFile" -Level INFO
+        }
+
+        $failedBackups = @($BackupStatus | Where-Object { $_.BackupStatus -eq 'Failed' })
+        if ($failedBackups.Count -gt 0) {
+            Write-Host "[!] WARNING: $($failedBackups.Count) GPO backup(s) failed. See $backupStatusFile for details." -ForegroundColor Yellow
+            Write-Log -Message "Detected $($failedBackups.Count) failed GPO backup(s). See $backupStatusFile for details." -Level WARN
         }
         
         Write-Log -Message "Exported $($ReportSummary.Count) GPO reports to $ExportPath" -Level INFO

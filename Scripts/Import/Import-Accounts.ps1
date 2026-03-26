@@ -71,11 +71,20 @@ if ($usersToCreate.Count -gt 0) {
 # --- 4. Import Users ---
 Invoke-Safely -ScriptBlock {
     Write-Host "`n--- Importing Users ---" -ForegroundColor Cyan
+    $createdUserCount = 0
+    $skippedExistingUserCount = 0
     foreach ($u in $usersToCreate) {
         $srcUser = $exportedUsers[$u.SourceSam]
         $targetSam = $u.TargetSam
         $targetOU = $u.TargetOU_DN
         $upn = "$targetSam@$TargetDomain"
+
+        $existingUser = Get-ADUser -Identity $targetSam -Server $TargetDomain -ErrorAction SilentlyContinue
+        if ($existingUser) {
+            $skippedExistingUserCount++
+            Write-Log -Message "Idempotency skip: User '$targetSam' already exists in target domain. Creation skipped." -Level WARN
+            continue
+        }
 
         $userParams = @{
             Name                  = $targetSam
@@ -101,10 +110,16 @@ Invoke-Safely -ScriptBlock {
             if ($PSCmdlet.ShouldProcess($targetSam, "Create User in $targetOU")) {
                 New-ADUser @userParams -ErrorAction Stop
                 Write-Log -Message "Created User: $targetSam" -Level INFO
+                $createdUserCount++
             }
         } catch {
             Write-Log -Message "Failed to create user '$targetSam': $($_.Exception.Message)" -Level ERROR
         }
+    }
+
+    Write-Log -Message "User import summary: created=$createdUserCount; skippedExisting=$skippedExistingUserCount." -Level INFO
+    if ($skippedExistingUserCount -gt 0) {
+        Write-Host "[!] Users: Skipped $skippedExistingUserCount existing account(s). See log for details." -ForegroundColor Yellow
     }
 } -Operation "Import Users"
 
@@ -112,9 +127,18 @@ Invoke-Safely -ScriptBlock {
 Invoke-Safely -ScriptBlock {
     Write-Host "`n--- Importing Computers ---" -ForegroundColor Cyan
     $compsToCreate = $CompMap | Where-Object { $_.Action -eq 'Create' }
+    $createdComputerCount = 0
+    $skippedExistingComputerCount = 0
     foreach ($c in $compsToCreate) {
         $targetName = $c.TargetName
         $targetOU = $c.TargetOU_DN
+
+        $existingComputer = Get-ADComputer -Identity $targetName -Server $TargetDomain -ErrorAction SilentlyContinue
+        if ($existingComputer) {
+            $skippedExistingComputerCount++
+            Write-Log -Message "Idempotency skip: Computer '$targetName' already exists in target domain. Creation skipped." -Level WARN
+            continue
+        }
 
         $compParams = @{
             Name           = $targetName
@@ -129,10 +153,16 @@ Invoke-Safely -ScriptBlock {
             if ($PSCmdlet.ShouldProcess($targetName, "Create Computer in $targetOU")) {
                 New-ADComputer @compParams -ErrorAction Stop
                 Write-Log -Message "Created Computer: $targetName" -Level INFO
+                $createdComputerCount++
             }
         } catch {
             Write-Log -Message "Failed to create computer '$targetName': $($_.Exception.Message)" -Level ERROR
         }
+    }
+
+    Write-Log -Message "Computer import summary: created=$createdComputerCount; skippedExisting=$skippedExistingComputerCount." -Level INFO
+    if ($skippedExistingComputerCount -gt 0) {
+        Write-Host "[!] Computers: Skipped $skippedExistingComputerCount existing account(s). See log for details." -ForegroundColor Yellow
     }
 } -Operation "Import Computers"
 
@@ -140,10 +170,19 @@ Invoke-Safely -ScriptBlock {
 Invoke-Safely -ScriptBlock {
     Write-Host "`n--- Importing Groups ---" -ForegroundColor Cyan
     $groupsToCreate = $GroupMap | Where-Object { $_.Action -eq 'Create' }
+    $createdGroupCount = 0
+    $skippedExistingGroupCount = 0
     foreach ($g in $groupsToCreate) {
         $srcGroup = $exportedGroups[$g.SourceSam]
         $targetSam = $g.TargetSam
         $targetOU = $g.TargetOU_DN
+
+        $existingGroup = Get-ADGroup -Identity $targetSam -Server $TargetDomain -ErrorAction SilentlyContinue
+        if ($existingGroup) {
+            $skippedExistingGroupCount++
+            Write-Log -Message "Idempotency skip: Group '$targetSam' already exists in target domain. Creation skipped." -Level WARN
+            continue
+        }
 
         $grpParams = @{
             Name           = $targetSam
@@ -161,10 +200,16 @@ Invoke-Safely -ScriptBlock {
             if ($PSCmdlet.ShouldProcess($targetSam, "Create Group in $targetOU")) {
                 New-ADGroup @grpParams -ErrorAction Stop
                 Write-Log -Message "Created Group: $targetSam" -Level INFO
+                $createdGroupCount++
             }
         } catch {
             Write-Log -Message "Failed to create group '$targetSam': $($_.Exception.Message)" -Level ERROR
         }
+    }
+
+    Write-Log -Message "Group import summary: created=$createdGroupCount; skippedExisting=$skippedExistingGroupCount." -Level INFO
+    if ($skippedExistingGroupCount -gt 0) {
+        Write-Host "[!] Groups: Skipped $skippedExistingGroupCount existing group(s). See log for details." -ForegroundColor Yellow
     }
 } -Operation "Import Groups"
 
@@ -173,11 +218,22 @@ Invoke-Safely -ScriptBlock {
     if ($exportedMembers) {
         Write-Host "`n--- Restoring Group Memberships ---" -ForegroundColor Cyan
         $addedCount = 0
+        $skippedCount = 0
         
         foreach ($m in $exportedMembers) {
             # Depending on how Export-AccountData exports it, we look for Group/Member names
-            $srcGroup = if ($m.GroupSamAccountName) { $m.GroupSamAccountName } else { $m.GroupName }
-            $srcMember = if ($m.MemberSamAccountName) { $m.MemberSamAccountName } else { $m.MemberName }
+            $srcGroup = if ($m.GroupSam) { $m.GroupSam }
+                        elseif ($m.GroupSamAccountName) { $m.GroupSamAccountName }
+                        else { $m.GroupName }
+            $srcMember = if ($m.MemberSam) { $m.MemberSam }
+                         elseif ($m.MemberSamAccountName) { $m.MemberSamAccountName }
+                         else { $m.MemberName }
+
+            if ([string]::IsNullOrWhiteSpace($srcGroup) -or [string]::IsNullOrWhiteSpace($srcMember)) {
+                $skippedCount++
+                Write-Log -Message "Skipping membership row with missing source values (Group='$srcGroup', Member='$srcMember')." -Level WARN
+                continue
+            }
             
             # Strip $ from computer SAMs for dictionary lookup
             if ($srcMember -match '\$$') { $srcMember = $srcMember -replace '\$$','' }
@@ -197,10 +253,13 @@ Invoke-Safely -ScriptBlock {
                 } catch {
                     Write-Log -Message "Failed to add '$tgtMember' to '$tgtGroup': $($_.Exception.Message)" -Level ERROR
                 }
+            } else {
+                $skippedCount++
+                Write-Log -Message "Skipping membership '$srcMember' -> '$srcGroup' because one or both mappings were not found (TargetMember='$tgtMember', TargetGroup='$tgtGroup')." -Level WARN
             }
         }
-        Write-Log -Message "Processed $addedCount membership links." -Level INFO
-        Write-Host "Processed $addedCount membership links." -ForegroundColor Green
+        Write-Log -Message "Processed $addedCount membership links; skipped $skippedCount." -Level INFO
+        Write-Host "Processed $addedCount membership links; skipped $skippedCount." -ForegroundColor Green
     } else {
         Write-Log -Message "No GroupMembers export found. Skipping membership restore." -Level WARN
     }

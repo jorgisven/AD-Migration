@@ -28,6 +28,41 @@ $ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $Scri
 if (-not (Test-Path $ModulePath)) { throw "Module manifest missing." }
 Import-Module $ModulePath -Force
 
+$config = Get-ADMigrationConfig
+if (-not (Test-Path $config.ImportRoot)) {
+    New-Item -Path $config.ImportRoot -ItemType Directory -Force | Out-Null
+}
+
+$stateFile = Join-Path $config.ImportRoot 'Import-Progress-State.json'
+
+function Save-ImportState {
+    param(
+        [hashtable]$State
+    )
+
+    $State.updatedAt = (Get-Date).ToString('o')
+    $State | ConvertTo-Json -Depth 6 | Set-Content -Path $stateFile -Encoding UTF8
+}
+
+function New-ImportState {
+    param(
+        [string]$Domain,
+        [string[]]$AllScripts
+    )
+
+    return @{
+        version          = 1
+        targetDomain     = $Domain
+        scripts          = $AllScripts
+        completedScripts = @()
+        failedScripts    = @()
+        lastScript       = ''
+        status           = 'running'
+        startedAt        = (Get-Date).ToString('o')
+        updatedAt        = (Get-Date).ToString('o')
+    }
+}
+
 # --- Get Target Domain ---
 if (-not $TargetDomain) {
     try {
@@ -65,20 +100,92 @@ if ($confirmResult -ne 'OK') {
     exit
 }
 
+$startIndex = 0
+$importState = $null
+if (Test-Path $stateFile) {
+    try {
+        $existingState = Get-Content -Path $stateFile -Raw | ConvertFrom-Json -ErrorAction Stop
+        if ($existingState -and $existingState.status -ne 'completed' -and $existingState.scripts) {
+            $existingDomain = [string]$existingState.targetDomain
+            $existingLast = [string]$existingState.lastScript
+            $resumeMsg = "A previous import progress state was found.`n`nTarget Domain: $existingDomain`nLast Step: $existingLast`n`nYES = Resume from next incomplete step`nNO = Restart import from beginning"
+            $resumeChoice = [System.Windows.Forms.MessageBox]::Show($resumeMsg, "Resume Previous Import?", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel, [System.Windows.Forms.MessageBoxIcon]::Question)
+
+            if ($resumeChoice -eq [System.Windows.Forms.DialogResult]::Cancel) {
+                Write-Host "Import cancelled by user." -ForegroundColor Yellow
+                exit
+            }
+
+            if ($resumeChoice -eq [System.Windows.Forms.DialogResult]::Yes) {
+                if ($existingDomain -and $existingDomain -ne $TargetDomain) {
+                    $domainMismatch = [System.Windows.Forms.MessageBox]::Show("Saved state domain '$existingDomain' differs from current '$TargetDomain'.`n`nYES = Use saved domain and resume`nNO = Keep current domain and restart", "Domain Mismatch", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                    if ($domainMismatch -eq [System.Windows.Forms.DialogResult]::Yes) {
+                        $TargetDomain = $existingDomain
+                    } else {
+                        Remove-Item -Path $stateFile -Force -ErrorAction SilentlyContinue
+                    }
+                }
+
+                if (Test-Path $stateFile) {
+                    $completed = @($existingState.completedScripts)
+                    $startIndex = $completed.Count
+                    if ($startIndex -gt $scripts.Count) { $startIndex = 0 }
+                    $importState = @{
+                        version          = 1
+                        targetDomain     = $TargetDomain
+                        scripts          = $scripts
+                        completedScripts = $completed
+                        failedScripts    = @($existingState.failedScripts)
+                        lastScript       = [string]$existingState.lastScript
+                        status           = 'running'
+                        startedAt        = [string]$existingState.startedAt
+                        updatedAt        = (Get-Date).ToString('o')
+                    }
+                    Save-ImportState -State $importState
+                    Write-Host "Resuming import from step index $startIndex of $($scripts.Count)." -ForegroundColor Yellow
+                }
+            } else {
+                Remove-Item -Path $stateFile -Force -ErrorAction SilentlyContinue
+            }
+        }
+    } catch {
+        Write-Host "Warning: existing import state was unreadable and will be ignored." -ForegroundColor Yellow
+        Remove-Item -Path $stateFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+if ($null -eq $importState) {
+    $importState = New-ImportState -Domain $TargetDomain -AllScripts $scripts
+    Save-ImportState -State $importState
+}
+
 $failedScripts = @()
 
-foreach ($script in $scripts) {
+for ($i = $startIndex; $i -lt $scripts.Count; $i++) {
+    $script = $scripts[$i]
     $scriptPath = Join-Path $ScriptRoot $script
+    $importState.lastScript = $script
+    Save-ImportState -State $importState
     
     if (Test-Path $scriptPath) {
         Write-Host "`n[+] Running $script..." -ForegroundColor Green
         try {
             # Execute script with TargetDomain parameter
             & $scriptPath -TargetDomain $TargetDomain -ErrorAction Stop
+            if ($importState.completedScripts -notcontains $script) {
+                $importState.completedScripts += $script
+            }
+            $importState.failedScripts = @($importState.failedScripts | Where-Object { $_ -ne $script })
+            Save-ImportState -State $importState
         } catch {
             $errMsg = $_.Exception.Message
             Write-Host "[-] CRITICAL ERROR running $($script): $errMsg" -ForegroundColor Red
             $failedScripts += $script
+            if ($importState.failedScripts -notcontains $script) {
+                $importState.failedScripts += $script
+            }
+            $importState.status = 'failed'
+            Save-ImportState -State $importState
 
             # Prompt to continue or abort
             $choice = [System.Windows.Forms.MessageBox]::Show("Step '$script' failed.`n`nError: $errMsg`n`nDo you want to continue with the next step?`n(Click No to abort the sequence)", "Import Step Failed", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Error)
@@ -90,6 +197,11 @@ foreach ($script in $scripts) {
     } else {
         Write-Host "[-] Script not found: $scriptPath" -ForegroundColor Red
         $failedScripts += $script
+        if ($importState.failedScripts -notcontains $script) {
+            $importState.failedScripts += $script
+        }
+        $importState.status = 'failed'
+        Save-ImportState -State $importState
     }
 }
 
@@ -111,6 +223,8 @@ if ($failedScripts.Count -gt 0) {
         }
     } catch {}
 } else {
+    $importState.status = 'completed'
+    Save-ImportState -State $importState
     Write-Host "`n=== Import Sequence Complete ===" -ForegroundColor Cyan
     [System.Windows.Forms.MessageBox]::Show("All import scripts completed successfully.`n`nPlease proceed to the validation phase.", "Import Complete", "OK", "Information")
 }

@@ -79,12 +79,50 @@ if (-not $TargetDomain) { $TargetDomain = (Get-ADDomain).DNSRoot }
 Write-Log -Message "Starting GPO Import to $TargetDomain..." -Level INFO
 
 Invoke-Safely -ScriptBlock {
-    # Get list of backups from the manifest
+    # Get list of backups from manifest; fallback to backup.xml discovery if manifest is missing.
     $manifestPath = Join-Path $BackupPath "manifest.xml"
-    if (-not (Test-Path $manifestPath)) { throw "Backup manifest.xml not found in $BackupPath" }
-    
-    [xml]$manifest = Get-Content $manifestPath
-    $backups = $manifest.Backups.BackupInst
+    $manifestPathAlt = Join-Path $BackupPath "Manifest.xml"
+    $backups = @()
+
+    if (Test-Path $manifestPath) {
+        [xml]$manifest = Get-Content $manifestPath
+        $backups = @($manifest.Backups.BackupInst)
+        Write-Log -Message "Loaded $($backups.Count) GPO backup entries from manifest.xml." -Level INFO
+    } elseif (Test-Path $manifestPathAlt) {
+        [xml]$manifest = Get-Content $manifestPathAlt
+        $backups = @($manifest.Backups.BackupInst)
+        Write-Log -Message "Loaded $($backups.Count) GPO backup entries from Manifest.xml." -Level INFO
+    } else {
+        Write-Log -Message "Backup manifest was not found in '$BackupPath'. Falling back to backup.xml discovery." -Level WARN
+
+        $backupXmlFiles = Get-ChildItem -Path $BackupPath -Filter "backup.xml" -Recurse -File -ErrorAction SilentlyContinue
+        foreach ($backupXml in $backupXmlFiles) {
+            try {
+                [xml]$backupDoc = Get-Content $backupXml.FullName
+                $idNode = $backupDoc.SelectSingleNode("//ID")
+                $nameNode = $backupDoc.SelectSingleNode("//GPODisplayName")
+                $id = if ($idNode) { [string]$idNode.InnerText } else { "" }
+                $name = if ($nameNode) { [string]$nameNode.InnerText } else { "" }
+
+                if (-not [string]::IsNullOrWhiteSpace($id) -and -not [string]::IsNullOrWhiteSpace($name)) {
+                    $backups += [PSCustomObject]@{
+                        ID             = $id
+                        GPODisplayName = $name
+                    }
+                }
+            } catch {
+                Write-Log -Message "Failed parsing backup descriptor '$($backupXml.FullName)': $($_.Exception.Message)" -Level WARN
+            }
+        }
+
+        # De-duplicate by backup ID in case of repeated reads.
+        $backups = @($backups | Group-Object ID | ForEach-Object { $_.Group | Select-Object -First 1 })
+        Write-Log -Message "Discovered $($backups.Count) GPO backup entries via backup.xml fallback." -Level INFO
+    }
+
+    if (-not $backups -or $backups.Count -eq 0) {
+        throw "No valid GPO backups were found in '$BackupPath'."
+    }
     
     foreach ($b in $backups) {
         $gpoName = $b.GPODisplayName
