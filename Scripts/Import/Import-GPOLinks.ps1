@@ -220,7 +220,9 @@ Invoke-Safely -ScriptBlock {
                         # New-GPLink throws if GPO doesn't exist, but we assume Import-GPOs ran
                         
                         if ($PSCmdlet.ShouldProcess($targetSOM, "Link GPO '$gpoName'") -and -not $WhatIfPreference) {
-                            New-GPLink -Name $gpoName -Target $targetSOM -LinkEnabled ($link.Enabled -eq 'true') -Enforced ($link.NoOverride -eq 'true') -Server $TargetDomain -ErrorAction Stop | Out-Null
+                            $linkEnabledVal = if ($link.Enabled -eq 'true') { 'Yes' } else { 'No' }
+                            $linkEnforcedVal = if ($link.NoOverride -eq 'true') { 'Yes' } else { 'No' }
+                            New-GPLink -Name $gpoName -Target $targetSOM -LinkEnabled $linkEnabledVal -Enforced $linkEnforcedVal -Server $TargetDomain -ErrorAction Stop | Out-Null
                             $script:LinkStats.Linked++
                             Write-Log -Message "Linked '$gpoName' to '$targetSOM'" -Level INFO
                         }

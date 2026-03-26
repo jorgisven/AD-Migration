@@ -202,6 +202,26 @@ Invoke-Safely -ScriptBlock {
     }
     $script:GpoImportStats.BackupsDiscovered = @($backups).Count
 
+    # Generate manifest.xml if missing (Import-GPO strictly requires it to map BackupId to folders)
+    $manifestTarget = Join-Path $BackupPath "manifest.xml"
+    if (-not (Test-Path $manifestTarget) -and -not (Test-Path (Join-Path $BackupPath "Manifest.xml"))) {
+        Write-Log -Message "Generating missing manifest.xml to satisfy Import-GPO cmdlet requirements..." -Level INFO
+        $sb = New-Object System.Text.StringBuilder
+        $sb.AppendLine('<?xml version="1.0" encoding="utf-8"?>') | Out-Null
+        $sb.AppendLine('<Backups xmlns="http://www.microsoft.com/GroupPolicy/BackupManifest">') | Out-Null
+        foreach ($b in $backups) {
+            $guidStr = $b.ID
+            if ($guidStr -notmatch '^\{') { $guidStr = "{$guidStr}" }
+            $escapedName = $b.GPODisplayName.Replace("&","&amp;").Replace("<","&lt;").Replace(">","&gt;").Replace('"',"&quot;").Replace("'","&apos;")
+            $sb.AppendLine("  <BackupInst>") | Out-Null
+            $sb.AppendLine("    <ID>$guidStr</ID>") | Out-Null
+            $sb.AppendLine("    <GPODisplayName>$escapedName</GPODisplayName>") | Out-Null
+            $sb.AppendLine("  </BackupInst>") | Out-Null
+        }
+        $sb.AppendLine('</Backups>') | Out-Null
+        Set-Content -Path $manifestTarget -Value $sb.ToString() -Encoding UTF8
+    }
+
     # Pre-compute target names and detect collisions before importing.
     $plan = @()
     foreach ($b in $backups) {

@@ -328,7 +328,8 @@ if ($runPreflightNow) {
     }
 }
 
-$confirmResult = [System.Windows.Forms.MessageBox]::Show("This will begin creating objects in the domain '$TargetDomain'.`n`nEnsure you have reviewed all mapping files in the 'Transform' directory before proceeding.", "Confirm Import", "OKCancel", "Warning")
+$confirmMsg = "This will begin creating objects in the domain '$TargetDomain'.`n`nEnsure you have reviewed all mapping files in the 'Transform' directory before proceeding.`n`nNote: No changes have been made to your domain yet. You may click 'Cancel' to exit now and safely resume later by restarting the Import phase from the Start-MigrationGUI."
+$confirmResult = [System.Windows.Forms.MessageBox]::Show($confirmMsg, "Confirm Import", "OKCancel", "Warning")
 if ($confirmResult -ne 'OK') {
     Write-Host "Import cancelled by user." -ForegroundColor Yellow
     Write-Log -Message "Import orchestrator cancelled by user before execution." -Level WARN

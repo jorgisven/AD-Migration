@@ -39,10 +39,13 @@ if (-not $TargetDomain) {
     Write-Log -Message "Target domain not specified, using current: $TargetDomain" -Level INFO
 }
 
+$script:OuStats = [ordered]@{ Evaluated = 0; Created = 0; Skipped = 0; Failed = 0 }
+
 Invoke-Safely -ScriptBlock {
     foreach ($row in $Mapping) {
         if ($row.Action -eq 'Skip') { continue }
 
+        $script:OuStats.Evaluated++
         $targetDN = $row.TargetDN
         
         # Parse DN to get Name and Parent Path
@@ -56,14 +59,27 @@ Invoke-Safely -ScriptBlock {
                 if ($PSCmdlet.ShouldProcess($targetDN, "Create OU") -and -not $WhatIfPreference) {
                     New-ADOrganizationalUnit -Name $name -Path $parentPath -Description $row.Description -Server $TargetDomain -ProtectedFromAccidentalDeletion $true -ErrorAction Stop
                     Write-Log -Message "Created OU: $targetDN" -Level INFO
+                    $script:OuStats.Created++
                 }
             } catch [Microsoft.ActiveDirectory.Management.ADIdentityAlreadyExistsException] {
                 Write-Log -Message "OU already exists: $targetDN" -Level INFO
+                $script:OuStats.Skipped++
             } catch {
                 Write-Log -Message "Failed to create $targetDN : $_" -Level ERROR
+                $script:OuStats.Failed++
             }
         } else {
             Write-Log -Message "Skipping invalid TargetDN format: $targetDN" -Level WARN
         }
     }
 } -Operation "Import OUs to $TargetDomain"
+
+$warningCount = $script:OuStats.Failed
+$summary = "Import OUs summary: Evaluated=$($script:OuStats.Evaluated), Created=$($script:OuStats.Created), Skipped=$($script:OuStats.Skipped), Failed=$($script:OuStats.Failed)"
+
+if ($warningCount -gt 0) {
+    Write-Host "[!] WARNING: OU Import encountered $warningCount failure(s). See logs for details." -ForegroundColor Yellow
+    Write-Log -Message "Import OUs succeeded with warnings. $summary" -Level WARN
+} else {
+    Write-Log -Message "Import OUs succeeded. $summary" -Level INFO
+}

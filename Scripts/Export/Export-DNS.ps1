@@ -136,11 +136,26 @@ try {
                         }
                     }
 
+                    $recordDataValue = $null
+                    if ($Rec.RecordData) {
+                        switch ($Rec.RecordType) {
+                            "A"     { $recordDataValue = $Rec.RecordData.IPv4Address.ToString() }
+                            "AAAA"  { $recordDataValue = $Rec.RecordData.IPv6Address.ToString() }
+                            "CNAME" { $recordDataValue = $Rec.RecordData.HostNameAlias }
+                            "TXT"   { $recordDataValue = $Rec.RecordData.DescriptiveText -join " " }
+                            "PTR"   { $recordDataValue = $Rec.RecordData.PtrDomainName }
+                            "MX"    { $recordDataValue = "$($Rec.RecordData.Preference) $($Rec.RecordData.MailExchange)" }
+                            "NS"    { $recordDataValue = $Rec.RecordData.NameServer }
+                            "SOA"   { $recordDataValue = "$($Rec.RecordData.PrimaryServer)" }
+                            default { $recordDataValue = $Rec.RecordData.ToString() }
+                        }
+                    }
+
                     $AllRecords += [PSCustomObject]@{
                         ZoneName   = $ZoneName
                         HostName   = $Rec.HostName
                         RecordType = $Rec.RecordType
-                        Data       = if ($Rec.RecordData) { $Rec.RecordData.ToString() } else { $null }
+                        Data       = $recordDataValue
                         Timestamp  = $Rec.Timestamp
                         TTL        = $Rec.TimeToLive
                     }

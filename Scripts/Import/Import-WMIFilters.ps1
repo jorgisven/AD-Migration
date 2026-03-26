@@ -41,12 +41,15 @@ if (-not $TargetDomain) { $TargetDomain = (Get-ADDomain).DNSRoot }
 
 Write-Log -Message "Starting WMI Filter Import to $TargetDomain..." -Level INFO
 
+$script:WmiStats = [ordered]@{ Evaluated = 0; Created = 0; Skipped = 0; Failed = 0 }
+
 Invoke-Safely -ScriptBlock {
     # WMI Filters are stored in the System container
     $rootDSE = Get-ADRootDSE -Server $TargetDomain
     $wmiContainer = "CN=WMIPolicy,CN=System,$($rootDSE.defaultNamingContext)"
     
     foreach ($row in $Filters) {
+        $script:WmiStats.Evaluated++
         $name = $row.Name
         $desc = $row.Description
         $query = $row.Query
@@ -56,6 +59,7 @@ Invoke-Safely -ScriptBlock {
         
         if ($existing) {
             Write-Log -Message "WMI Filter '$name' already exists. Skipping." -Level WARN
+            $script:WmiStats.Skipped++
         } else {
             # Create new WMI Filter Object
             $params = @{
@@ -70,10 +74,26 @@ Invoke-Safely -ScriptBlock {
                     'msWMI-IntFormatDecimal' = 2 # Standard version
                 }
             }
-            if ($PSCmdlet.ShouldProcess($name, "Create WMI Filter")) {
-                New-ADObject @params -Server $TargetDomain
-                Write-Log -Message "Created WMI Filter: $name" -Level INFO
+            try {
+                if ($PSCmdlet.ShouldProcess($name, "Create WMI Filter") -and -not $WhatIfPreference) {
+                    New-ADObject @params -Server $TargetDomain -ErrorAction Stop
+                    Write-Log -Message "Created WMI Filter: $name" -Level INFO
+                    $script:WmiStats.Created++
+                }
+            } catch {
+                Write-Log -Message "Failed to create WMI Filter '$name': $_" -Level ERROR
+                $script:WmiStats.Failed++
             }
         }
     }
 } -Operation "Import WMI Filters"
+
+$warningCount = $script:WmiStats.Failed
+$summary = "Import WMI Filters summary: Evaluated=$($script:WmiStats.Evaluated), Created=$($script:WmiStats.Created), Skipped=$($script:WmiStats.Skipped), Failed=$($script:WmiStats.Failed)"
+
+if ($warningCount -gt 0) {
+    Write-Host "[!] WARNING: WMI Filter Import encountered $warningCount failure(s). See logs for details." -ForegroundColor Yellow
+    Write-Log -Message "Import WMI Filters succeeded with warnings. $summary" -Level WARN
+} else {
+    Write-Log -Message "Import WMI Filters succeeded. $summary" -Level INFO
+}

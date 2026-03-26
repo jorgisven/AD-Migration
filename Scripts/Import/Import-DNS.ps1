@@ -104,8 +104,18 @@ if ($dnsWarningResult -eq 'No') {
 }
 
 # Global conflict preferences (Prompt, Overwrite, Skip)
-$GlobalZoneAction = "Prompt"
 $GlobalRecordAction = "Prompt"
+
+$script:DnsStats = [ordered]@{
+    ZonesEvaluated   = 0
+    ZonesCreated     = 0
+    ZonesSkipped     = 0
+    ZonesFailed      = 0
+    RecordsEvaluated = 0
+    RecordsCreated   = 0
+    RecordsSkipped   = 0
+    RecordsFailed    = 0
+}
 
 Invoke-Safely -ScriptBlock {
     # Check for DNS Module
@@ -128,36 +138,20 @@ Invoke-Safely -ScriptBlock {
 
     # 2. Process Zones
     foreach ($z in $Zones) {
+        $script:DnsStats.ZonesEvaluated++
         $zName = $z.ZoneName
         
         # Skip system zones if they weren't filtered earlier
-        if ($zName -match "^_msdcs" -or $zName -eq "." -or $zName -eq "TrustAnchors") {
+        if ($zName -match "^_msdcs" -or $zName -eq "." -or $zName -eq "TrustAnchors" -or $zName -match "^(0|127|255)\.in-addr\.arpa$") {
+            $script:DnsStats.ZonesSkipped++
             continue
         }
 
         try {
             $exists = Get-DnsServerZone -Name $zName -ComputerName $TargetServer -ErrorAction SilentlyContinue
             if ($exists) {
-                # Handle Zone Conflict
-                $action = "Skip"
-                if ($GlobalZoneAction -eq "Prompt") {
-                    $res = Show-ConflictDialog -Message "Zone '$zName' already exists on $TargetServer.`nOverwrite will DELETE the existing zone and recreate it." -Title "Zone Conflict"
-                    $action = $res.Action
-                    if ($res.ApplyAll) { $GlobalZoneAction = $action }
-                } else {
-                    $action = $GlobalZoneAction
-                }
-
-                if ($action -eq "Overwrite") {
-                    Write-Log -Message "Overwriting Zone: $zName" -Level WARN
-                    Remove-DnsServerZone -Name $zName -ComputerName $TargetServer -Force -Confirm:$false -ErrorAction Stop
-                    # Re-create logic falls through to below? No, need to re-run creation code.
-                    # Simpler to just delete here and let the 'else' block or a flag handle creation, 
-                    # but since the 'else' is structured for creation, we can just proceed to create if we deleted it.
-                    $exists = $false 
-                } else {
-                    Write-Log -Message "Skipping existing Zone: $zName" -Level INFO
-                }
+                $script:DnsStats.ZonesSkipped++
+                Write-Log -Message "Zone '$zName' already exists on $TargetServer. Operating additively (skipping creation)." -Level INFO
             } else {
                 # Create Zone
                 if ($z.IsDsIntegrated -eq 'True') {
@@ -165,32 +159,34 @@ Invoke-Safely -ScriptBlock {
                 } else {
                     Add-DnsServerPrimaryZone -Name $zName -ZoneFile "$zName.dns" -ComputerName $TargetServer -ErrorAction Stop
                 }
+                $script:DnsStats.ZonesCreated++
                 Write-Log -Message "Created Zone: $zName" -Level INFO
             }
-            
-            # If we overwrote (deleted), we need to create it now
-            if ($action -eq "Overwrite" -and -not $exists) {
-                 if ($z.IsDsIntegrated -eq 'True') {
-                    Add-DnsServerPrimaryZone -Name $zName -ReplicationScope "Domain" -ComputerName $TargetServer -ErrorAction Stop
-                } else {
-                    Add-DnsServerPrimaryZone -Name $zName -ZoneFile "$zName.dns" -ComputerName $TargetServer -ErrorAction Stop
-                }
-                Write-Log -Message "Re-created Zone: $zName" -Level INFO
-            }
         } catch {
+            $script:DnsStats.ZonesFailed++
             Write-Log -Message "Failed to create zone '$zName': $_" -Level ERROR
         }
     }
 
     # 3. Process Records
     foreach ($r in $Records) {
+        $script:DnsStats.RecordsEvaluated++
         $zName = $r.ZoneName
         $hostName = $r.HostName
         $type = $r.RecordType
         $data = $r.Data
         
+        # Skip records for system/critical zones
+        if ($zName -match "^_msdcs" -or $zName -eq "." -or $zName -eq "TrustAnchors" -or $zName -match "^(0|127|255)\.in-addr\.arpa$") {
+            $script:DnsStats.RecordsSkipped++
+            continue
+        }
+
         # Skip SOA and NS as they are auto-generated
-        if ($type -eq "SOA" -or $type -eq "NS") { continue }
+        if ($type -eq "SOA" -or $type -eq "NS") { 
+            $script:DnsStats.RecordsSkipped++
+            continue 
+        }
 
         $retry = $true
         while ($retry) {
@@ -209,6 +205,7 @@ Invoke-Safely -ScriptBlock {
                         }
                     }
                 }
+                $script:DnsStats.RecordsCreated++
             } catch {
                 $errMsg = $_.Exception.Message
                 # Check for conflict errors (Already exists, or CNAME conflict)
@@ -232,12 +229,15 @@ Invoke-Safely -ScriptBlock {
                                 Remove-DnsServerResourceRecord -ZoneName $zName -ComputerName $TargetServer -Force -Confirm:$false -ErrorAction Stop
                             $retry = $true # Retry the Add
                         } catch {
+                            $script:DnsStats.RecordsFailed++
                             Write-Log -Message "Failed to remove conflicting record '$hostName': $_" -Level ERROR
                         }
                     } else {
+                        $script:DnsStats.RecordsSkipped++
                         Write-Log -Message "Skipping conflicting record: $hostName ($type)" -Level INFO
                     }
                 } else {
+                    $script:DnsStats.RecordsFailed++
                     Write-Log -Message "Failed to add $type record '$hostName' in '$zName': $errMsg" -Level WARN
                 }
             }
@@ -247,3 +247,13 @@ Invoke-Safely -ScriptBlock {
     Write-Host "DNS Import Complete."
 
 } -Operation "Import DNS Records"
+
+$warningCount = $script:DnsStats.ZonesFailed + $script:DnsStats.RecordsFailed
+$summary = "DNS Import summary: Zones (Eval=$($script:DnsStats.ZonesEvaluated), Created=$($script:DnsStats.ZonesCreated), Skipped=$($script:DnsStats.ZonesSkipped), Failed=$($script:DnsStats.ZonesFailed)), Records (Eval=$($script:DnsStats.RecordsEvaluated), Created=$($script:DnsStats.RecordsCreated), Skipped=$($script:DnsStats.RecordsSkipped), Failed=$($script:DnsStats.RecordsFailed))"
+
+if ($warningCount -gt 0) {
+    Write-Host "[!] WARNING: DNS Import encountered $warningCount failure(s). See logs for details." -ForegroundColor Yellow
+    Write-Log -Message "Import DNS Records succeeded with warnings. $summary" -Level WARN
+} else {
+    Write-Log -Message "Import DNS Records succeeded. $summary" -Level INFO
+}

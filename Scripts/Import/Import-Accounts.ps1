@@ -232,11 +232,16 @@ if ($usersToCreate.Count -gt 0) {
 
 }
 
+$script:AccountStats = [ordered]@{
+    UsersCreated = 0; UsersSkipped = 0; UsersFailed = 0
+    CompsCreated = 0; CompsSkipped = 0; CompsFailed = 0
+    GroupsCreated = 0; GroupsSkipped = 0; GroupsFailed = 0
+    MembersAdded = 0; MembersSkipped = 0; MembersFailed = 0
+}
+
 # --- 4. Import Users ---
 Invoke-Safely -ScriptBlock {
     Write-Host "`n--- Importing Users ---" -ForegroundColor Cyan
-    $createdUserCount = 0
-    $skippedExistingUserCount = 0
     foreach ($u in $usersToCreate) {
         $srcUser = $exportedUsers[$u.SourceSam]
         $targetSam = $u.TargetSam
@@ -245,7 +250,7 @@ Invoke-Safely -ScriptBlock {
 
         $existingUser = Get-ADUser -Filter { SamAccountName -eq $targetSam } -Server $TargetDomain -ErrorAction SilentlyContinue
         if ($existingUser) {
-            $skippedExistingUserCount++
+            $script:AccountStats.UsersSkipped++
             Write-Log -Message "Idempotency skip: User '$targetSam' already exists in target domain. Creation skipped." -Level WARN
             continue
         }
@@ -274,16 +279,17 @@ Invoke-Safely -ScriptBlock {
             if ($PSCmdlet.ShouldProcess($targetSam, "Create User in $targetOU") -and -not $WhatIfPreference) {
                 New-ADUser @userParams -ErrorAction Stop
                 Write-Log -Message "Created User: $targetSam" -Level INFO
-                $createdUserCount++
+                $script:AccountStats.UsersCreated++
             }
         } catch {
+            $script:AccountStats.UsersFailed++
             Write-Log -Message "Failed to create user '$targetSam': $($_.Exception.Message)" -Level ERROR
         }
     }
 
-    Write-Log -Message "User import summary: created=$createdUserCount; skippedExisting=$skippedExistingUserCount." -Level INFO
-    if ($skippedExistingUserCount -gt 0) {
-        Write-Host "[!] Users: Skipped $skippedExistingUserCount existing account(s). See log for details." -ForegroundColor Yellow
+    Write-Log -Message "User import summary: created=$($script:AccountStats.UsersCreated); skippedExisting=$($script:AccountStats.UsersSkipped); failed=$($script:AccountStats.UsersFailed)." -Level INFO
+    if ($script:AccountStats.UsersSkipped -gt 0) {
+        Write-Host "[!] Users: Skipped $($script:AccountStats.UsersSkipped) existing account(s). See log for details." -ForegroundColor Yellow
     }
 } -Operation "Import Users"
 
@@ -291,15 +297,13 @@ Invoke-Safely -ScriptBlock {
 Invoke-Safely -ScriptBlock {
     Write-Host "`n--- Importing Computers ---" -ForegroundColor Cyan
     $compsToCreate = $CompMap | Where-Object { $_.Action -eq 'Create' }
-    $createdComputerCount = 0
-    $skippedExistingComputerCount = 0
     foreach ($c in $compsToCreate) {
         $targetName = $c.TargetName
         $targetOU = $c.TargetOU_DN
 
         $existingComputer = Get-ADComputer -Filter { Name -eq $targetName } -Server $TargetDomain -ErrorAction SilentlyContinue
         if ($existingComputer) {
-            $skippedExistingComputerCount++
+            $script:AccountStats.CompsSkipped++
             Write-Log -Message "Idempotency skip: Computer '$targetName' already exists in target domain. Creation skipped." -Level WARN
             continue
         }
@@ -317,16 +321,17 @@ Invoke-Safely -ScriptBlock {
             if ($PSCmdlet.ShouldProcess($targetName, "Create Computer in $targetOU") -and -not $WhatIfPreference) {
                 New-ADComputer @compParams -ErrorAction Stop
                 Write-Log -Message "Created Computer: $targetName" -Level INFO
-                $createdComputerCount++
+                $script:AccountStats.CompsCreated++
             }
         } catch {
+            $script:AccountStats.CompsFailed++
             Write-Log -Message "Failed to create computer '$targetName': $($_.Exception.Message)" -Level ERROR
         }
     }
 
-    Write-Log -Message "Computer import summary: created=$createdComputerCount; skippedExisting=$skippedExistingComputerCount." -Level INFO
-    if ($skippedExistingComputerCount -gt 0) {
-        Write-Host "[!] Computers: Skipped $skippedExistingComputerCount existing account(s). See log for details." -ForegroundColor Yellow
+    Write-Log -Message "Computer import summary: created=$($script:AccountStats.CompsCreated); skippedExisting=$($script:AccountStats.CompsSkipped); failed=$($script:AccountStats.CompsFailed)." -Level INFO
+    if ($script:AccountStats.CompsSkipped -gt 0) {
+        Write-Host "[!] Computers: Skipped $($script:AccountStats.CompsSkipped) existing account(s). See log for details." -ForegroundColor Yellow
     }
 } -Operation "Import Computers"
 
@@ -334,8 +339,6 @@ Invoke-Safely -ScriptBlock {
 Invoke-Safely -ScriptBlock {
     Write-Host "`n--- Importing Groups ---" -ForegroundColor Cyan
     $groupsToCreate = $GroupMap | Where-Object { $_.Action -eq 'Create' }
-    $createdGroupCount = 0
-    $skippedExistingGroupCount = 0
     foreach ($g in $groupsToCreate) {
         $srcGroup = $exportedGroups[$g.SourceSam]
         $targetSam = $g.TargetSam
@@ -343,7 +346,7 @@ Invoke-Safely -ScriptBlock {
 
         $existingGroup = Get-ADGroup -Filter { SamAccountName -eq $targetSam } -Server $TargetDomain -ErrorAction SilentlyContinue
         if ($existingGroup) {
-            $skippedExistingGroupCount++
+            $script:AccountStats.GroupsSkipped++
             Write-Log -Message "Idempotency skip: Group '$targetSam' already exists in target domain. Creation skipped." -Level WARN
             continue
         }
@@ -364,16 +367,17 @@ Invoke-Safely -ScriptBlock {
             if ($PSCmdlet.ShouldProcess($targetSam, "Create Group in $targetOU") -and -not $WhatIfPreference) {
                 New-ADGroup @grpParams -ErrorAction Stop
                 Write-Log -Message "Created Group: $targetSam" -Level INFO
-                $createdGroupCount++
+                $script:AccountStats.GroupsCreated++
             }
         } catch {
+            $script:AccountStats.GroupsFailed++
             Write-Log -Message "Failed to create group '$targetSam': $($_.Exception.Message)" -Level ERROR
         }
     }
 
-    Write-Log -Message "Group import summary: created=$createdGroupCount; skippedExisting=$skippedExistingGroupCount." -Level INFO
-    if ($skippedExistingGroupCount -gt 0) {
-        Write-Host "[!] Groups: Skipped $skippedExistingGroupCount existing group(s). See log for details." -ForegroundColor Yellow
+    Write-Log -Message "Group import summary: created=$($script:AccountStats.GroupsCreated); skippedExisting=$($script:AccountStats.GroupsSkipped); failed=$($script:AccountStats.GroupsFailed)." -Level INFO
+    if ($script:AccountStats.GroupsSkipped -gt 0) {
+        Write-Host "[!] Groups: Skipped $($script:AccountStats.GroupsSkipped) existing group(s). See log for details." -ForegroundColor Yellow
     }
 } -Operation "Import Groups"
 
@@ -381,8 +385,6 @@ Invoke-Safely -ScriptBlock {
 Invoke-Safely -ScriptBlock {
     if ($exportedMembers) {
         Write-Host "`n--- Restoring Group Memberships ---" -ForegroundColor Cyan
-        $addedCount = 0
-        $skippedCount = 0
         
         foreach ($m in $exportedMembers) {
             # Depending on how Export-AccountData exports it, we look for Group/Member names
@@ -394,7 +396,7 @@ Invoke-Safely -ScriptBlock {
                          else { $m.MemberName }
 
             if ([string]::IsNullOrWhiteSpace($srcGroup) -or [string]::IsNullOrWhiteSpace($srcMember)) {
-                $skippedCount++
+                $script:AccountStats.MembersSkipped++
                 Write-Log -Message "Skipping membership row with missing source values (Group='$srcGroup', Member='$srcMember')." -Level WARN
                 continue
             }
@@ -412,21 +414,34 @@ Invoke-Safely -ScriptBlock {
                     if ($PSCmdlet.ShouldProcess("Add $tgtMember to $tgtGroup", "Group Membership") -and -not $WhatIfPreference) {
                         # Use SilentlyContinue to ignore "Already a member" errors gracefully
                         Add-ADGroupMember -Identity $tgtGroup -Members $tgtMember -Server $TargetDomain -ErrorAction SilentlyContinue
-                        $addedCount++
+                        $script:AccountStats.MembersAdded++
                     }
                 } catch {
+                    $script:AccountStats.MembersFailed++
                     Write-Log -Message "Failed to add '$tgtMember' to '$tgtGroup': $($_.Exception.Message)" -Level ERROR
                 }
             } else {
-                $skippedCount++
+                $script:AccountStats.MembersSkipped++
                 Write-Log -Message "Skipping membership '$srcMember' -> '$srcGroup' because one or both mappings were not found (TargetMember='$tgtMember', TargetGroup='$tgtGroup')." -Level WARN
             }
         }
-        Write-Log -Message "Processed $addedCount membership links; skipped $skippedCount." -Level INFO
-        Write-Host "Processed $addedCount membership links; skipped $skippedCount." -ForegroundColor Green
+        Write-Log -Message "Processed $($script:AccountStats.MembersAdded) membership links; skipped $($script:AccountStats.MembersSkipped); failed $($script:AccountStats.MembersFailed)." -Level INFO
+        Write-Host "Processed $($script:AccountStats.MembersAdded) membership links; skipped $($script:AccountStats.MembersSkipped); failed $($script:AccountStats.MembersFailed)." -ForegroundColor Green
     } else {
         Write-Log -Message "No GroupMembers export found. Skipping membership restore." -Level WARN
     }
 } -Operation "Import Memberships"
 
-Write-Host "`n=== Account Import Complete ===" -ForegroundColor Green
+$warningCount = $script:AccountStats.UsersFailed + $script:AccountStats.CompsFailed + $script:AccountStats.GroupsFailed + $script:AccountStats.MembersFailed
+$summary = "Account Import summary: Users (Created=$($script:AccountStats.UsersCreated), Skipped=$($script:AccountStats.UsersSkipped), Failed=$($script:AccountStats.UsersFailed)), " +
+           "Computers (Created=$($script:AccountStats.CompsCreated), Skipped=$($script:AccountStats.CompsSkipped), Failed=$($script:AccountStats.CompsFailed)), " +
+           "Groups (Created=$($script:AccountStats.GroupsCreated), Skipped=$($script:AccountStats.GroupsSkipped), Failed=$($script:AccountStats.GroupsFailed)), " +
+           "Memberships (Added=$($script:AccountStats.MembersAdded), Skipped=$($script:AccountStats.MembersSkipped), Failed=$($script:AccountStats.MembersFailed))"
+
+if ($warningCount -gt 0) {
+    Write-Host "`n[!] WARNING: Account Import encountered $warningCount failure(s). See logs for details." -ForegroundColor Yellow
+    Write-Log -Message "Import Accounts succeeded with warnings. $summary" -Level WARN
+} else {
+    Write-Host "`n=== Account Import Complete ===" -ForegroundColor Green
+    Write-Log -Message "Import Accounts succeeded. $summary" -Level INFO
+}
