@@ -42,7 +42,13 @@ if (-not (Test-Path $MapPath)) { New-Item -ItemType Directory -Path $MapPath -Fo
 
 Write-Log -Message "Starting Account Mapping analysis against $TargetDomain..." -Level INFO
 
-$IdentityMap = @()
+$script:IdentityMap = @()
+$script:IdentityMapStats = [ordered]@{
+    TotalRead                = 0
+    MissingSid               = 0
+    SkippedDomainControllers = 0
+    Added                    = 0
+}
 
 # 1. Load OU Map to pre-fill TargetOU_DN
 $OUMap = @{}
@@ -126,6 +132,7 @@ Invoke-Safely -ScriptBlock {
         )
 
         foreach ($item in $items) {
+            $script:IdentityMapStats.TotalRead++
             # Defensive: Ensure $MappingData is always an array
             if ($null -eq $MappingData -or $MappingData.GetType().Name -ne 'Object[]') {
                 $MappingData = @()
@@ -174,6 +181,7 @@ Invoke-Safely -ScriptBlock {
 
             # Skip objects located in the Domain Controllers OU (including child OUs)
             if ($parentDN -match "(?:^|,)OU=Domain Controllers,") {
+                $script:IdentityMapStats.SkippedDomainControllers++
                 continue
             }
             # Only set targetOU from map if it wasn't already set by built-in logic
@@ -253,15 +261,18 @@ Invoke-Safely -ScriptBlock {
             # We map SourceSID -> TargetSam because GPO Migration Tables use SIDs
             if ($sid) {
                  # Defensive: Ensure $IdentityMap is always an array
-                 if ($null -eq $IdentityMap -or $IdentityMap.GetType().Name -ne 'Object[]') {
-                     $IdentityMap = @()
+                 if ($null -eq $script:IdentityMap -or $script:IdentityMap.GetType().Name -ne 'Object[]') {
+                     $script:IdentityMap = @()
                  }
-                $IdentityMap += [PSCustomObject]@{
+                $script:IdentityMap += [PSCustomObject]@{
                     SourceSam = $sam
                     SourceSID = $sid
                     TargetSam = $targetName
                     Type      = $ObjectType
                 }
+                $script:IdentityMapStats.Added++
+            } else {
+                $script:IdentityMapStats.MissingSid++
             }
         }
         
@@ -285,9 +296,13 @@ Invoke-Safely -ScriptBlock {
 
     # Output Map (Simple format for other scripts)
     $mapFile = Join-Path $MapPath "Identity_Map_Final.csv"
-    $IdentityMap | Export-Csv -Path $mapFile -NoTypeInformation -Encoding UTF8
+    $script:IdentityMap | Export-Csv -Path $mapFile -NoTypeInformation -Encoding UTF8
 
     Write-Log -Message "Generated identity map: $mapFile" -Level INFO
+    Write-Log -Message "Identity map diagnostics: Read=$($script:IdentityMapStats.TotalRead), Added=$($script:IdentityMapStats.Added), MissingSID=$($script:IdentityMapStats.MissingSid), SkippedDomainControllersOU=$($script:IdentityMapStats.SkippedDomainControllers)" -Level INFO
+    if ($script:IdentityMapStats.Added -eq 0) {
+        Write-Log -Message "Identity map contains 0 entries. Check export CSV SID values and account placement filters." -Level WARN
+    }
 
     Write-Host "----------------------------------------------------------------" -ForegroundColor Cyan
     Write-Host "Account Mapping Drafts Generated in:\n  $MapPath"

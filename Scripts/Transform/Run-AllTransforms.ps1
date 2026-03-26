@@ -142,9 +142,38 @@ try {
 
     # 1. Validate Exports
     Write-Host "`n--- Step 1: Validate Exported Data ---" -ForegroundColor Yellow
-    Invoke-TransformStep -ScriptName "Validation-Exports.ps1"
-    Write-Log -Message "Export validation completed successfully." -Level INFO
-    Show-ManualActionPrompt -Title "Exports Validated" -Message "Export validation complete. Check the output above for any warnings.`n`nClick OK to proceed to OU Mapping."
+    $exportsValidated = $false
+    $exportsValidationBypassed = $false
+    $exportsValidationAttempt = 0
+    while (-not $exportsValidated) {
+        $exportsValidationAttempt++
+        Write-Log -Message "Export validation attempt #$exportsValidationAttempt started." -Level INFO
+        try {
+            Invoke-TransformStep -ScriptName "Validation-Exports.ps1"
+            $exportsValidated = $true
+            Write-Log -Message "Export validation attempt #$exportsValidationAttempt succeeded." -Level INFO
+        } catch {
+            $errText = $_.Exception.Message
+            Write-Log -Message "Export validation attempt #$exportsValidationAttempt failed: $errText" -Level ERROR
+            $decision = [System.Windows.Forms.MessageBox]::Show("Export validation failed.`n`nError: $errText`n`nYES = Retry validation`nNO = Continue Anyway`nCancel = Abort", "Export Validation Failed", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($decision -eq [System.Windows.Forms.DialogResult]::Yes) {
+                Write-Log -Message "Export validation retry requested by user after attempt #$exportsValidationAttempt." -Level WARN
+            } elseif ($decision -eq [System.Windows.Forms.DialogResult]::No) {
+                $exportsValidated = $true
+                $exportsValidationBypassed = $true
+                Write-Log -Message "User selected Continue Anyway after failed export validation attempt #$exportsValidationAttempt." -Level WARN
+            } else {
+                Write-Log -Message "User cancelled during export validation after failed attempt #$exportsValidationAttempt." -Level WARN
+                throw "User cancelled operation."
+            }
+        }
+    }
+
+    if ($exportsValidationBypassed) {
+        Show-ManualActionPrompt -Title "Exports Validation Bypassed" -Message "Export validation was bypassed by user selection (Continue Anyway).`n`nProceed with caution and review logs for details before import."
+    } else {
+        Show-ManualActionPrompt -Title "Exports Validated" -Message "Export validation complete. Check the output above for any warnings.`n`nClick OK to proceed to OU Mapping."
+    }
 
     # 2. OU Mapping
     Write-Host "`n--- Step 2: OU Mapping ---" -ForegroundColor Yellow
@@ -152,20 +181,40 @@ try {
     $guiMapperPath = Join-Path $ScriptRoot "Transform-OUMap-GUI.ps1"
 
     $ouValid = $false
+    $ouValidationBypassed = $false
+    $ouValidationAttempt = 0
     $ouMsg = "The script has created 'OU_Map_Draft.csv'.`n`nPlease edit this file to define your target OU structure. You can use the GUI mapper for this.`n`nClick OK when you have finished editing and saved the file."
     while (-not $ouValid) {
         Show-ManualActionPrompt -Title "Manual Action: Edit OU Map" -Message $ouMsg -ToolPath $guiMapperPath -ToolButtonText "Launch GUI Mapper"
+        $ouValidationAttempt++
+        Write-Log -Message "OU Map validation attempt #$ouValidationAttempt started." -Level INFO
         try {
             Invoke-TransformStep -ScriptName "Validation-OUMap.ps1"
             $ouValid = $true
-            Write-Log -Message "OU Map validation completed successfully." -Level INFO
+            Write-Log -Message "OU Map validation attempt #$ouValidationAttempt succeeded." -Level INFO
         } catch {
-            Write-Log -Message "OU Map validation error: $_" -Level ERROR
+            $errText = $_.Exception.Message
+            Write-Log -Message "OU Map validation attempt #$ouValidationAttempt failed: $errText" -Level ERROR
             [System.Windows.Forms.MessageBox]::Show("Validation failed! Please check the console behind this window for details.", "Validation Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            $decision = [System.Windows.Forms.MessageBox]::Show("OU Map validation failed.`n`nError: $errText`n`nYES = Retry after fixing`nNO = Continue Anyway`nCancel = Abort", "OU Map Validation", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($decision -eq [System.Windows.Forms.DialogResult]::Yes) {
+                Write-Log -Message "OU Map validation retry requested by user after attempt #$ouValidationAttempt." -Level WARN
+            } elseif ($decision -eq [System.Windows.Forms.DialogResult]::No) {
+                $ouValid = $true
+                $ouValidationBypassed = $true
+                Write-Log -Message "User selected Continue Anyway after failed OU Map validation attempt #$ouValidationAttempt." -Level WARN
+            } else {
+                Write-Log -Message "User cancelled during OU Map validation after failed attempt #$ouValidationAttempt." -Level WARN
+                throw "User cancelled operation."
+            }
             $ouMsg = "VALIDATION FAILED! Check the console for errors.`n`nClick 'Launch GUI Mapper' to fix the issues in your mapping, save it, and click OK to try again."
         }
     }
-    [System.Windows.Forms.MessageBox]::Show("OU Map validation passed!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    if ($ouValidationBypassed) {
+        [System.Windows.Forms.MessageBox]::Show("OU Map validation was bypassed (Continue Anyway). Please review logs and proceed carefully.", "Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+    } else {
+        [System.Windows.Forms.MessageBox]::Show("OU Map validation passed!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    }
 
     # 3. Account Mapping
     Write-Host "`n--- Step 3: Account Mapping ---" -ForegroundColor Yellow
@@ -173,20 +222,40 @@ try {
     $guiAccountMapperPath = Join-Path $ScriptRoot "Transform-AccountMap-GUI.ps1"
 
     $accValid = $false
+    $accValidationBypassed = $false
+    $accValidationAttempt = 0
     $accMsg = "Account mapping files have been generated.`n`nPlease review and edit these files to define how accounts will be migrated and placed in the new OUs.`n`nClick OK when you are finished."
     while (-not $accValid) {
         Show-ManualActionPrompt -Title "Manual Action: Edit Account Map" -Message $accMsg -ToolPath $guiAccountMapperPath -ToolButtonText "Launch GUI Mapper"
+        $accValidationAttempt++
+        Write-Log -Message "Account Placement validation attempt #$accValidationAttempt started." -Level INFO
         try {
             Invoke-TransformStep -ScriptName "Validation-AccountPlacement.ps1"
             $accValid = $true
-            Write-Log -Message "Account Placement validation completed successfully." -Level INFO
+            Write-Log -Message "Account Placement validation attempt #$accValidationAttempt succeeded." -Level INFO
         } catch {
-            Write-Log -Message "Account Placement validation error: $_" -Level ERROR
+            $errText = $_.Exception.Message
+            Write-Log -Message "Account Placement validation attempt #$accValidationAttempt failed: $errText" -Level ERROR
             [System.Windows.Forms.MessageBox]::Show("Validation failed! Please check the console behind this window for details.", "Validation Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            $decision = [System.Windows.Forms.MessageBox]::Show("Account Placement validation failed.`n`nError: $errText`n`nYES = Retry after fixing`nNO = Continue Anyway`nCancel = Abort", "Account Validation", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($decision -eq [System.Windows.Forms.DialogResult]::Yes) {
+                Write-Log -Message "Account Placement validation retry requested by user after attempt #$accValidationAttempt." -Level WARN
+            } elseif ($decision -eq [System.Windows.Forms.DialogResult]::No) {
+                $accValid = $true
+                $accValidationBypassed = $true
+                Write-Log -Message "User selected Continue Anyway after failed Account Placement validation attempt #$accValidationAttempt." -Level WARN
+            } else {
+                Write-Log -Message "User cancelled during Account Placement validation after failed attempt #$accValidationAttempt." -Level WARN
+                throw "User cancelled operation."
+            }
             $accMsg = "VALIDATION FAILED! Check the console for errors.`n`nClick 'Launch GUI Mapper' to fix the 'TargetOU_DN' entries in your account mappings, save them, and click OK to try again."
         }
     }
-    [System.Windows.Forms.MessageBox]::Show("Account placement validation passed!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    if ($accValidationBypassed) {
+        [System.Windows.Forms.MessageBox]::Show("Account placement validation was bypassed (Continue Anyway). Please review logs and proceed carefully.", "Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+    } else {
+        [System.Windows.Forms.MessageBox]::Show("Account placement validation passed!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    }
     # 4. WMI, GPO, DNS Transforms
     Write-Host "`n--- Step 4: WMI, GPO, and DNS Transforms ---" -ForegroundColor Yellow
     Invoke-TransformStep -ScriptName "Transform-WMIFilters.ps1"
@@ -220,20 +289,40 @@ Click NO to skip this check and continue to the next step.
     $guiMigTablePath = Join-Path $ScriptRoot "Transform-MigTable-GUI.ps1"
 
     $migValid = $false
+    $migValidationBypassed = $false
+    $migValidationAttempt = 0
     $migMsg = "A GPO Migration Table (.migtable) has been generated based on your account mappings and GPO analysis.`n`nPlease review the table and fill in any blank Destination paths or accounts.`n`nClick OK when you are finished."
     while (-not $migValid) {
         Show-ManualActionPrompt -Title "Manual Action: Edit Migration Table" -Message $migMsg -ToolPath $guiMigTablePath -ToolButtonText "Launch GUI Editor"
+        $migValidationAttempt++
+        Write-Log -Message "Migration Table validation attempt #$migValidationAttempt started." -Level INFO
         try {
             Invoke-TransformStep -ScriptName "Validation-MigTable.ps1"
             $migValid = $true
-            Write-Log -Message "Migration Table validation completed successfully." -Level INFO
+            Write-Log -Message "Migration Table validation attempt #$migValidationAttempt succeeded." -Level INFO
         } catch {
-            Write-Log -Message "Migration Table validation error: $_" -Level ERROR
+            $errText = $_.Exception.Message
+            Write-Log -Message "Migration Table validation attempt #$migValidationAttempt failed: $errText" -Level ERROR
             [System.Windows.Forms.MessageBox]::Show("Validation failed! Please check the console behind this window for details.", "Validation Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            $decision = [System.Windows.Forms.MessageBox]::Show("Migration Table validation failed.`n`nError: $errText`n`nYES = Retry after fixing`nNO = Continue Anyway`nCancel = Abort", "Migration Table Validation", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($decision -eq [System.Windows.Forms.DialogResult]::Yes) {
+                Write-Log -Message "Migration Table validation retry requested by user after attempt #$migValidationAttempt." -Level WARN
+            } elseif ($decision -eq [System.Windows.Forms.DialogResult]::No) {
+                $migValid = $true
+                $migValidationBypassed = $true
+                Write-Log -Message "User selected Continue Anyway after failed Migration Table validation attempt #$migValidationAttempt." -Level WARN
+            } else {
+                Write-Log -Message "User cancelled during Migration Table validation after failed attempt #$migValidationAttempt." -Level WARN
+                throw "User cancelled operation."
+            }
             $migMsg = "VALIDATION FAILED! Check the console for errors.`n`nEvery item in the Migration Table must have a Destination mapped. Click 'Launch GUI Editor' to fix the empty fields, save, and click OK to try again."
         }
     }
-    [System.Windows.Forms.MessageBox]::Show("Migration Table validation passed!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    if ($migValidationBypassed) {
+        [System.Windows.Forms.MessageBox]::Show("Migration Table validation was bypassed (Continue Anyway). Please review logs and proceed carefully.", "Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+    } else {
+        [System.Windows.Forms.MessageBox]::Show("Migration Table validation passed!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    }
 
     [System.Windows.Forms.MessageBox]::Show("The Transform phase is complete. All necessary mapping and rebuild files have been generated in the 'Transform' directory.`n`nYou can now proceed to the Import phase.", "Transform Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     Write-Host "`n=== Transform Sequence Complete ===" -ForegroundColor Cyan

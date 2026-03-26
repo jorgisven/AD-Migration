@@ -9,7 +9,10 @@
 
 param(
     [Parameter(Mandatory = $false)]
-    [string]$TargetServer
+    [string]$TargetServer,
+
+    [Parameter(Mandatory = $false)]
+    [string]$TargetDomain
 )
 
 # Import module and config
@@ -81,8 +84,12 @@ if (Test-Path $TransformPath) {
     throw "No DNS data found in Export or Transform folders."
 }
 
-# Determine Target Server (Localhost if not specified)
-if (-not $TargetServer) {
+# Determine Target Server (supports Run-AllImports passing -TargetDomain)
+if ([string]::IsNullOrWhiteSpace($TargetServer) -and -not [string]::IsNullOrWhiteSpace($TargetDomain)) {
+    $TargetServer = $TargetDomain
+    Write-Log -Message "Import-DNS received TargetDomain '$TargetDomain'; using it as TargetServer." -Level INFO
+}
+if ([string]::IsNullOrWhiteSpace($TargetServer)) {
     $TargetServer = $env:COMPUTERNAME
 }
 

@@ -100,7 +100,7 @@ try {
                     $backupError = $_.Exception.Message
                     $backupErrorId = $_.FullyQualifiedErrorId
                     $backupErrorCategory = $_.CategoryInfo.Category
-                    Write-Log -Message "Backup failed for GPO '$($GPO.DisplayName)' (GUID: $($GPO.Id)) on domain '$SourceDomain'. Reason: $backupError | Category: $backupErrorCategory | ErrorId: $backupErrorId" -Level ERROR
+                    Write-Log -Message "Backup failed for GPO '$($GPO.DisplayName)' (GUID: $($GPO.Id)) on domain '$SourceDomain'. Reason: $backupError | Category: $backupErrorCategory | ErrorId: $backupErrorId" -Level WARN
                 }
 
                 $BackupStatus += [PSCustomObject]@{

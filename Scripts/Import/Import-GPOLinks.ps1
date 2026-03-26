@@ -9,7 +9,17 @@
 [CmdletBinding(SupportsShouldProcess=$true)]
 param(
     [Parameter(Mandatory = $false)]
-    [string]$TargetDomain
+    [string]$TargetDomain,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$IncludeDefaultDomainPolicies,
+
+    [Parameter(Mandatory = $false)]
+    [string]$DefaultPolicyNameSuffix = ' (Migrated Copy)',
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('Prompt', 'Skip', 'Rename')]
+    [string]$DefaultDomainPolicyMode = 'Prompt'
 )
 
 # Import module and config
@@ -24,13 +34,85 @@ $config = Get-ADMigrationConfig
 $ReportPath = Join-Path $config.ExportRoot 'GPO_Reports'
 $MapPath = Join-Path $config.TransformRoot 'Mapping'
 
+function ConvertTo-NormalizedDN {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    $normalized = $Value.Trim()
+    # Normalize escaped separators and whitespace so map keys can match report variants.
+    $normalized = $normalized -replace '\\,', ','
+    $normalized = $normalized -replace '\\=', '='
+    $normalized = $normalized -replace '\\#', '#'
+    $normalized = $normalized -replace '\\;', ';'
+    $normalized = $normalized -replace '\\"', '"'
+    $normalized = $normalized -replace '\\<', '<'
+    $normalized = $normalized -replace '\\>', '>'
+    $normalized = $normalized -replace '\\+', '+'
+    $normalized = $normalized -replace '\\ ', ' '
+    $normalized = $normalized -replace '\s*,\s*', ','
+    return $normalized.ToLowerInvariant()
+}
+
+function Convert-DNToCanonical {
+    param([string]$DistinguishedName)
+
+    $dn = ConvertTo-NormalizedDN -Value $DistinguishedName
+    if ([string]::IsNullOrWhiteSpace($dn)) { return $null }
+
+    $parts = $dn -split ','
+    $ouParts = @()
+    $dcParts = @()
+
+    foreach ($part in $parts) {
+        if ($part -like 'ou=*') {
+            $ouParts += ($part.Substring(3))
+            continue
+        }
+
+        if ($part -like 'dc=*') {
+            $dcParts += ($part.Substring(3))
+        }
+    }
+
+    if (-not $dcParts -or $dcParts.Count -eq 0) { return $null }
+
+    $domain = ($dcParts -join '.').ToLowerInvariant()
+    if ($ouParts.Count -gt 0) {
+        [array]::Reverse($ouParts)
+        return ($domain + '/' + ($ouParts -join '/')).ToLowerInvariant()
+    }
+
+    return $domain
+}
+
 # 1. Load OU Map (Transform Data)
 $mapFiles = Get-ChildItem -Path $MapPath -Filter "OU_Map_*.csv" | Sort-Object LastWriteTime -Descending
 if (-not $mapFiles) { throw "Missing OU Map (Run Transform-OUMap.ps1)" }
 
-$OUMap = @{}
-Import-Csv $mapFiles[0].FullName | ForEach-Object { $OUMap[$_.SourceDN] = $_.TargetDN }
-Write-Log -Message "Loaded OU Map with $($OUMap.Count) entries" -Level INFO
+$OUMapByDN = @{}
+$OUMapByCanonical = @{}
+
+Import-Csv $mapFiles[0].FullName | ForEach-Object {
+    $sourceDN = [string]$_.SourceDN
+    $targetDN = [string]$_.TargetDN
+    $action = [string]$_.Action
+
+    if ($action -eq 'Skip' -or [string]::IsNullOrWhiteSpace($sourceDN) -or [string]::IsNullOrWhiteSpace($targetDN)) {
+        return
+    }
+
+    $dnKey = ConvertTo-NormalizedDN -Value $sourceDN
+    if (-not [string]::IsNullOrWhiteSpace($dnKey)) {
+        $OUMapByDN[$dnKey] = $targetDN
+    }
+
+    $canonicalKey = Convert-DNToCanonical -DistinguishedName $sourceDN
+    if (-not [string]::IsNullOrWhiteSpace($canonicalKey)) {
+        $OUMapByCanonical[$canonicalKey] = $targetDN
+    }
+}
+
+Write-Log -Message "Loaded OU Map with $($OUMapByDN.Count) DN keys and $($OUMapByCanonical.Count) canonical keys" -Level INFO
 
 # 1.5 Load Identity Map (for Security Filtering)
 $IdentityMap = @{}
@@ -50,25 +132,83 @@ if (-not $xmlFiles) { throw "Missing GPO Reports (Run Export-GPOReports.ps1)" }
 
 if (-not $TargetDomain) { $TargetDomain = (Get-ADDomain).DNSRoot }
 
+$defaultPolicyNames = @(
+    'Default Domain Policy',
+    'Default Domain Controllers Policy'
+)
+
+$effectiveDefaultPolicyMode = $DefaultDomainPolicyMode
+if ($effectiveDefaultPolicyMode -eq 'Prompt' -and $IncludeDefaultDomainPolicies) {
+    # Backward compatibility: old switch implied importing defaults.
+    $effectiveDefaultPolicyMode = 'Rename'
+    Write-Log -Message "Legacy switch IncludeDefaultDomainPolicies was set. Effective default policy mode changed from Prompt to Rename." -Level WARN
+}
+
+if ($effectiveDefaultPolicyMode -eq 'Prompt') {
+    # Prefer safe non-blocking behavior in direct script usage.
+    $effectiveDefaultPolicyMode = 'Skip'
+    Write-Log -Message "DefaultDomainPolicyMode='Prompt' was provided to link rebuild. Using Skip unless orchestrator passes explicit mode." -Level WARN
+}
+
+if ($effectiveDefaultPolicyMode -eq 'Rename' -and [string]::IsNullOrWhiteSpace($DefaultPolicyNameSuffix)) {
+    $DefaultPolicyNameSuffix = ' (Migrated Copy)'
+}
+
+Write-Log -Message "Default domain policy handling mode for links: $effectiveDefaultPolicyMode" -Level INFO
+Write-Log -Message "Default domain policy options for links: Mode='$effectiveDefaultPolicyMode', Suffix='$DefaultPolicyNameSuffix'" -Level INFO
+
 Write-Log -Message "Starting GPO Link Rebuild..." -Level INFO
+
+$script:LinkStats = [ordered]@{
+    GposProcessed               = 0
+    LinksEvaluated              = 0
+    Linked                      = 0
+    AlreadyLinked               = 0
+    SkippedDefaultPolicies      = 0
+    SkippedMissingOUMap         = 0
+    LinkFailures                = 0
+    WmiFilterFailures           = 0
+    SecurityFilterFailures      = 0
+    AuthenticatedUsersRemovalsFailed = 0
+}
 
 Invoke-Safely -ScriptBlock {
     foreach ($xmlFile in $xmlFiles) {
+        $script:LinkStats.GposProcessed++
         [xml]$xml = Get-Content $xmlFile.FullName
-        $gpoName = $xml.GPO.Name
+        $sourceGpoName = [string]$xml.GPO.Name
+        $gpoName = $sourceGpoName
+
+        if ($defaultPolicyNames -contains $sourceGpoName) {
+            if ($effectiveDefaultPolicyMode -eq 'Skip') {
+                $script:LinkStats.SkippedDefaultPolicies++
+                Write-Log -Message "Skipping link restore for '$sourceGpoName' because default domain policies are excluded by default." -Level INFO
+                continue
+            }
+
+            if ($effectiveDefaultPolicyMode -eq 'Rename') {
+                $gpoName = "$sourceGpoName$DefaultPolicyNameSuffix"
+            }
+        }
         
         # Find LinksTo (Where this GPO is linked)
         $links = $xml.GPO.LinksTo
         
         if ($links) {
             foreach ($link in $links) {
+                $script:LinkStats.LinksEvaluated++
                 $sourceSOM = $link.SOMPath # e.g. "ou=sales,dc=source,dc=local"
                 $targetSOM = $null
+                $sourceSomText = [string]$sourceSOM
+                $sourceSomKey = ConvertTo-NormalizedDN -Value $sourceSomText
+                $sourceSomCanonical = if ($sourceSomText) { $sourceSomText.Trim().ToLowerInvariant() } else { '' }
                 
                 # Determine Target Location
-                if ($OUMap.ContainsKey($sourceSOM)) {
-                    $targetSOM = $OUMap[$sourceSOM]
-                } elseif ($sourceSOM -match "DC=") {
+                if (-not [string]::IsNullOrWhiteSpace($sourceSomKey) -and $OUMapByDN.ContainsKey($sourceSomKey)) {
+                    $targetSOM = $OUMapByDN[$sourceSomKey]
+                } elseif (-not [string]::IsNullOrWhiteSpace($sourceSomCanonical) -and $OUMapByCanonical.ContainsKey($sourceSomCanonical)) {
+                    $targetSOM = $OUMapByCanonical[$sourceSomCanonical]
+                } elseif ($sourceSomText -match '^\s*(DC=[^,]+\s*(,\s*DC=[^,]+\s*)*)$') {
                     # If linked to Domain Root, map to Target Domain Root
                     $targetSOM = $TargetDomain # Simplified, assumes domain root link
                 }
@@ -81,17 +221,21 @@ Invoke-Safely -ScriptBlock {
                         
                         if ($PSCmdlet.ShouldProcess($targetSOM, "Link GPO '$gpoName'")) {
                             New-GPLink -Name $gpoName -Target $targetSOM -LinkEnabled ($link.Enabled -eq 'true') -Enforced ($link.NoOverride -eq 'true') -Server $TargetDomain -ErrorAction Stop | Out-Null
+                            $script:LinkStats.Linked++
                             Write-Log -Message "Linked '$gpoName' to '$targetSOM'" -Level INFO
                         }
                     } catch {
                         if ($_.Exception.Message -match "already linked") {
+                            $script:LinkStats.AlreadyLinked++
                             Write-Log -Message "Link for '$gpoName' at '$targetSOM' already exists." -Level INFO
                         } else {
+                            $script:LinkStats.LinkFailures++
                             Write-Log -Message "Failed to link '$gpoName' to '$targetSOM': $_" -Level WARN
                         }
                     }
                 } else {
-                    Write-Log -Message "Skipping link for '$gpoName': Source path '$sourceSOM' not found in OU Map" -Level WARN
+                    $script:LinkStats.SkippedMissingOUMap++
+                    Write-Log -Message "Skipping link for '$gpoName': Source path '$sourceSOM' not found in OU Map (DN/canonical lookup)." -Level WARN
                 }
             }
         }
@@ -106,6 +250,7 @@ Invoke-Safely -ScriptBlock {
                     Write-Log -Message "Linked WMI Filter '$wmiFilter' to '$gpoName'" -Level INFO
                 }
             } catch {
+                $script:LinkStats.WmiFilterFailures++
                 Write-Log -Message "Failed to link WMI Filter '$wmiFilter' to '$gpoName'" -Level WARN
             }
         }
@@ -148,6 +293,7 @@ Invoke-Safely -ScriptBlock {
                         }
                     }
                     catch {
+                        $script:LinkStats.SecurityFilterFailures++
                         Write-Log -Message "Failed to set GpoApply for '$trusteeName' on GPO '$gpoName'. Principal may not exist in target domain. Details: $_" -Level WARN
                         Write-Log -Message "Failed to set GpoApply for '$targetTrustee' on GPO '$gpoName'. Principal may not exist in target domain. Details: $_" -Level WARN
                     }
@@ -163,6 +309,7 @@ Invoke-Safely -ScriptBlock {
                         Set-GPPermission -Name $gpoName -PermissionLevel None -TargetName 'Authenticated Users' -TargetType Group -Server $TargetDomain -ErrorAction Stop
                     }
                 } catch {
+                    $script:LinkStats.AuthenticatedUsersRemovalsFailed++
                     # This might fail if it was already removed or never existed, which is fine.
                     Write-Log -Message "Could not remove GpoApply from 'Authenticated Users' on GPO '$gpoName'. It may have already been removed. Details: $_" -Level WARN
                 }
@@ -170,3 +317,18 @@ Invoke-Safely -ScriptBlock {
         }
     }
 } -Operation "Rebuild GPO Links"
+
+$warningCount =
+    $script:LinkStats.SkippedMissingOUMap +
+    $script:LinkStats.LinkFailures +
+    $script:LinkStats.WmiFilterFailures +
+    $script:LinkStats.SecurityFilterFailures +
+    $script:LinkStats.AuthenticatedUsersRemovalsFailed
+
+$summary = "Rebuild GPO Links summary: GPOs=$($script:LinkStats.GposProcessed), LinksEvaluated=$($script:LinkStats.LinksEvaluated), Linked=$($script:LinkStats.Linked), AlreadyLinked=$($script:LinkStats.AlreadyLinked), SkippedDefaultPolicies=$($script:LinkStats.SkippedDefaultPolicies), SkippedMissingOUMap=$($script:LinkStats.SkippedMissingOUMap), LinkFailures=$($script:LinkStats.LinkFailures), WMIFilterFailures=$($script:LinkStats.WmiFilterFailures), SecurityFilterFailures=$($script:LinkStats.SecurityFilterFailures), AuthUsersRemovalFailures=$($script:LinkStats.AuthenticatedUsersRemovalsFailed)"
+
+if ($warningCount -gt 0) {
+    Write-Log -Message "Rebuild GPO Links succeeded with warnings. $summary" -Level WARN
+} else {
+    Write-Log -Message "Rebuild GPO Links succeeded. $summary" -Level INFO
+}

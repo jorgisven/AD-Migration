@@ -7,6 +7,9 @@
     and Group account mappings without requiring Excel.
 #>
 
+# PSScriptAnalyzer false-positive suppression for WinForms event scriptblocks.
+#pragma warning disable PSAvoidAssignmentToAutomaticVariable
+
 # Import module and config
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ModulePath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) 'Scripts') 'ADMigration\ADMigration.psd1'
@@ -128,47 +131,47 @@ function Get-UserInputText {
         return [Microsoft.VisualBasic.Interaction]::InputBox($Prompt, $Title, $DefaultText)
     }
 
-    $inputForm = New-Object System.Windows.Forms.Form
-    $inputForm.Text = $Title
-    $inputForm.Size = New-Object System.Drawing.Size(560, 165)
-    $inputForm.StartPosition = 'CenterParent'
-    $inputForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
-    $inputForm.MaximizeBox = $false
-    $inputForm.MinimizeBox = $false
+    $dialogForm = New-Object System.Windows.Forms.Form
+    $dialogForm.Text = $Title
+    $dialogForm.Size = New-Object System.Drawing.Size(560, 165)
+    $dialogForm.StartPosition = 'CenterParent'
+    $dialogForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $dialogForm.MaximizeBox = $false
+    $dialogForm.MinimizeBox = $false
 
     $lblPrompt = New-Object System.Windows.Forms.Label
     $lblPrompt.Text = $Prompt
     $lblPrompt.AutoSize = $false
     $lblPrompt.Size = New-Object System.Drawing.Size(520, 36)
     $lblPrompt.Location = New-Object System.Drawing.Point(12, 10)
-    $inputForm.Controls.Add($lblPrompt)
+    $dialogForm.Controls.Add($lblPrompt)
 
-    $txtInput = New-Object System.Windows.Forms.TextBox
-    $txtInput.Text = $DefaultText
-    $txtInput.Size = New-Object System.Drawing.Size(520, 22)
-    $txtInput.Location = New-Object System.Drawing.Point(12, 50)
-    $inputForm.Controls.Add($txtInput)
+    $txtValue = New-Object System.Windows.Forms.TextBox
+    $txtValue.Text = $DefaultText
+    $txtValue.Size = New-Object System.Drawing.Size(520, 22)
+    $txtValue.Location = New-Object System.Drawing.Point(12, 50)
+    $dialogForm.Controls.Add($txtValue)
 
     $btnOk = New-Object System.Windows.Forms.Button
     $btnOk.Text = 'OK'
     $btnOk.Size = New-Object System.Drawing.Size(90, 28)
     $btnOk.Location = New-Object System.Drawing.Point(350, 85)
     $btnOk.DialogResult = [System.Windows.Forms.DialogResult]::OK
-    $inputForm.Controls.Add($btnOk)
+    $dialogForm.Controls.Add($btnOk)
 
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = 'Cancel'
     $btnCancel.Size = New-Object System.Drawing.Size(90, 28)
     $btnCancel.Location = New-Object System.Drawing.Point(442, 85)
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
-    $inputForm.Controls.Add($btnCancel)
+    $dialogForm.Controls.Add($btnCancel)
 
-    $inputForm.AcceptButton = $btnOk
-    $inputForm.CancelButton = $btnCancel
+    $dialogForm.AcceptButton = $btnOk
+    $dialogForm.CancelButton = $btnCancel
 
-    $dialogResult = $inputForm.ShowDialog()
+    $dialogResult = $dialogForm.ShowDialog()
     if ($dialogResult -eq [System.Windows.Forms.DialogResult]::OK) {
-        return $txtInput.Text
+        return $txtValue.Text
     }
     return ''
 }

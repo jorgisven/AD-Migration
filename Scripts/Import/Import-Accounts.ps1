@@ -57,15 +57,179 @@ $exportedUsers = Get-LatestExport "Users" | Group-Object -AsHashTable -Property 
 $exportedGroups = Get-LatestExport "Groups" | Group-Object -AsHashTable -Property SamAccountName
 $exportedMembers = Get-LatestExport "GroupMembers"
 
+function ConvertTo-PlainText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [Security.SecureString]$SecureString
+    )
+
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureString)
+    try {
+        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    } finally {
+        if ($bstr -ne [IntPtr]::Zero) {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        }
+    }
+}
+
+function Get-UserNameTokens {
+    param(
+        [string[]]$Values
+    )
+
+    $tokens = @()
+    foreach ($v in $Values) {
+        if ([string]::IsNullOrWhiteSpace($v)) { continue }
+        $pieces = $v -split '[^A-Za-z0-9]+'
+        foreach ($p in $pieces) {
+            if ($p.Length -ge 3) {
+                $tokens += $p.ToLowerInvariant()
+            }
+        }
+    }
+
+    return @($tokens | Select-Object -Unique)
+}
+
+function Test-DefaultPasswordCandidate {
+    param(
+        [Parameter(Mandatory = $true)]
+        [Security.SecureString]$Password,
+
+        [string]$SamAccountName,
+        [string]$GivenName,
+        [string]$Surname,
+        [string]$DisplayName,
+
+        [int]$MinPasswordLength = 7,
+        [bool]$ComplexityEnabled = $true
+    )
+
+    $reasons = @()
+    $passwordText = ConvertTo-PlainText -SecureString $Password
+
+    if ($passwordText.Length -lt $MinPasswordLength) {
+        $reasons += "Length below MinPasswordLength ($MinPasswordLength)."
+    }
+
+    if ($ComplexityEnabled) {
+        $categoryCount = 0
+        if ($passwordText -cmatch '[A-Z]') { $categoryCount++ }
+        if ($passwordText -cmatch '[a-z]') { $categoryCount++ }
+        if ($passwordText -match '\d') { $categoryCount++ }
+        if ($passwordText -match '[^A-Za-z0-9]') { $categoryCount++ }
+
+        if ($categoryCount -lt 3) {
+            $reasons += "Complexity categories below required minimum (3 of 4)."
+        }
+
+        $passwordLower = $passwordText.ToLowerInvariant()
+        $tokenInputs = @($SamAccountName, $GivenName, $Surname, $DisplayName)
+        $tokens = Get-UserNameTokens -Values $tokenInputs
+        foreach ($token in $tokens) {
+            if ($passwordLower.Contains($token)) {
+                $reasons += "Contains identity token '$token'."
+            }
+        }
+    }
+
+    return [PSCustomObject]@{
+        IsValid = ($reasons.Count -eq 0)
+        Reasons = $reasons
+    }
+}
+
 # --- 3. Prompt for Default Password ---
 $usersToCreate = $UserMap | Where-Object { $_.Action -eq 'Create' }
 $securePassword = $null
 
 if ($usersToCreate.Count -gt 0) {
+    $effectivePolicy = $null
+    $minPasswordLength = 7
+    $complexityEnabled = $true
+    try {
+        $effectivePolicy = Get-ADDefaultDomainPasswordPolicy -Server $TargetDomain -ErrorAction Stop
+        if ($effectivePolicy.MinPasswordLength -gt 0) { $minPasswordLength = [int]$effectivePolicy.MinPasswordLength }
+        $complexityEnabled = [bool]$effectivePolicy.ComplexityEnabled
+        Write-Log -Message "Resolved domain password policy for '$TargetDomain': ComplexityEnabled=$complexityEnabled, MinPasswordLength=$minPasswordLength." -Level INFO
+    } catch {
+        Write-Log -Message "Could not resolve domain password policy for '$TargetDomain'. Using fallback assumptions (ComplexityEnabled=True, MinPasswordLength=7). Details: $($_.Exception.Message)" -Level WARN
+    }
+
+    $passwordAccepted = $false
+    $passwordAttempt = 0
+
     Write-Host "`nThere are $($usersToCreate.Count) new users to create." -ForegroundColor Cyan
     Write-Host "Please enter a default initial password. (Users will be forced to change this at first logon)." -ForegroundColor Yellow
-    $securePassword = Read-Host "Default Password" -AsSecureString
-    if (-not $securePassword) { throw "A default password is required to create new user accounts." }
+
+    while (-not $passwordAccepted) {
+        $passwordAttempt++
+        Write-Log -Message "Default password validation attempt #$passwordAttempt started." -Level INFO
+
+        $candidateSecure = Read-Host "Default Password" -AsSecureString
+        if (-not $candidateSecure) {
+            throw "A default password is required to create new user accounts."
+        }
+
+        $candidateText = ConvertTo-PlainText -SecureString $candidateSecure
+        if ([string]::IsNullOrWhiteSpace($candidateText)) {
+            Write-Log -Message "Default password validation attempt #$passwordAttempt failed: password was empty." -Level WARN
+            continue
+        }
+
+        $problemUsers = @()
+        foreach ($u in $usersToCreate) {
+            $srcUser = $exportedUsers[$u.SourceSam]
+            if ($srcUser -is [array]) { $srcUser = $srcUser | Select-Object -First 1 }
+
+            $givenName = if ($srcUser -and $srcUser.GivenName) { [string]$srcUser.GivenName } else { '' }
+            $surname = if ($srcUser -and $srcUser.Surname) { [string]$srcUser.Surname } else { '' }
+            $displayName = if ($srcUser -and $srcUser.DisplayName) { [string]$srcUser.DisplayName } else { '' }
+            $sam = if ([string]::IsNullOrWhiteSpace($u.TargetSam)) { [string]$u.SourceSam } else { [string]$u.TargetSam }
+
+            $check = Test-DefaultPasswordCandidate -Password $candidateText -SamAccountName $sam -GivenName $givenName -Surname $surname -DisplayName $displayName -MinPasswordLength $minPasswordLength -ComplexityEnabled $complexityEnabled
+            if (-not $check.IsValid) {
+                $problemUsers += [PSCustomObject]@{
+                    Sam     = $sam
+                    Reasons = ($check.Reasons -join ' ')
+                }
+            }
+        }
+
+        if ($problemUsers.Count -eq 0) {
+            $passwordAccepted = $true
+            $securePassword = $candidateSecure
+            Write-Log -Message "Default password validation attempt #$passwordAttempt succeeded for all pending users." -Level INFO
+            break
+        }
+
+        $sample = @($problemUsers | Select-Object -First 5)
+        Write-Log -Message "Default password validation attempt #$passwordAttempt flagged $($problemUsers.Count) user(s) as likely to fail policy checks." -Level WARN
+        foreach ($p in $sample) {
+            Write-Log -Message "Password preflight warning for '$($p.Sam)': $($p.Reasons)" -Level WARN
+        }
+
+        Write-Host "[!] Password preflight warning: likely policy failure for $($problemUsers.Count) user(s)." -ForegroundColor Yellow
+        $decision = Read-Host "Enter R to retry password, C to continue anyway, or A to abort"
+        switch (($decision | ForEach-Object { $_.Trim().ToUpperInvariant() })) {
+            'R' {
+                Write-Log -Message "User chose to retry default password after attempt #$passwordAttempt." -Level WARN
+                continue
+            }
+            'C' {
+                $passwordAccepted = $true
+                $securePassword = $candidateSecure
+                Write-Log -Message "User selected Continue Anyway for default password after attempt #$passwordAttempt." -Level WARN
+                break
+            }
+            default {
+                Write-Log -Message "User aborted during default password preflight after attempt #$passwordAttempt." -Level WARN
+                throw "User cancelled operation during default password preflight."
+            }
+        }
+    }
+
 }
 
 # --- 4. Import Users ---

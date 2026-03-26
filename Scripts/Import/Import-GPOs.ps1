@@ -16,7 +16,17 @@ param(
     [string]$MigrationTablePath,
 
     [Parameter(Mandatory = $false)]
-    [switch]$Force
+    [switch]$Force,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$IncludeDefaultDomainPolicies,
+
+    [Parameter(Mandatory = $false)]
+    [string]$DefaultPolicyNameSuffix = ' (Migrated Copy)',
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('Prompt', 'Skip', 'Rename')]
+    [string]$DefaultDomainPolicyMode = 'Prompt'
 )
 
 # Import module and config
@@ -76,7 +86,61 @@ if (-not (Test-Path $BackupPath)) {
 
 if (-not $TargetDomain) { $TargetDomain = (Get-ADDomain).DNSRoot }
 
+$defaultPolicyNames = @(
+    'Default Domain Policy',
+    'Default Domain Controllers Policy'
+)
+
+$effectiveDefaultPolicyMode = $DefaultDomainPolicyMode
+if ($effectiveDefaultPolicyMode -eq 'Prompt' -and $IncludeDefaultDomainPolicies) {
+    # Backward compatibility: old switch implied importing defaults.
+    $effectiveDefaultPolicyMode = 'Rename'
+    Write-Log -Message "Legacy switch IncludeDefaultDomainPolicies was set. Effective default policy mode changed from Prompt to Rename." -Level WARN
+}
+
+if ($effectiveDefaultPolicyMode -eq 'Prompt') {
+    if ([Environment]::UserInteractive) {
+        try {
+            Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+            $prompt = "Default domain policies were found in backups.`n`nYES = Skip them (recommended)`nNO = Import as renamed copies`nCancel = Abort"
+            $choice = [System.Windows.Forms.MessageBox]::Show($prompt, "Default GPO Policy Handling", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel, [System.Windows.Forms.MessageBoxIcon]::Question)
+            if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) {
+                $effectiveDefaultPolicyMode = 'Skip'
+                Write-Log -Message "Default GPO policy prompt selection: Skip" -Level INFO
+            } elseif ($choice -eq [System.Windows.Forms.DialogResult]::No) {
+                $effectiveDefaultPolicyMode = 'Rename'
+                Write-Log -Message "Default GPO policy prompt selection: Rename" -Level INFO
+            } else {
+                throw "Import cancelled by user while selecting default policy handling mode."
+            }
+        } catch {
+            Write-Log -Message "Default policy mode prompt unavailable or cancelled. Falling back to Skip. Details: $($_.Exception.Message)" -Level WARN
+            $effectiveDefaultPolicyMode = 'Skip'
+        }
+    } else {
+        Write-Log -Message "Non-interactive session detected and DefaultDomainPolicyMode='Prompt'. Falling back to Skip." -Level WARN
+        $effectiveDefaultPolicyMode = 'Skip'
+    }
+}
+
+if ($effectiveDefaultPolicyMode -eq 'Rename' -and [string]::IsNullOrWhiteSpace($DefaultPolicyNameSuffix)) {
+    $DefaultPolicyNameSuffix = ' (Migrated Copy)'
+}
+
+Write-Log -Message "Default domain policy handling mode: $effectiveDefaultPolicyMode" -Level INFO
+Write-Log -Message "Default domain policy options: Mode='$effectiveDefaultPolicyMode', Suffix='$DefaultPolicyNameSuffix'" -Level INFO
+
 Write-Log -Message "Starting GPO Import to $TargetDomain..." -Level INFO
+
+$script:GpoImportStats = [ordered]@{
+    BackupsDiscovered          = 0
+    SkippedDefaultPolicy       = 0
+    SkippedDuplicateCollision  = 0
+    SkippedExisting            = 0
+    ImportAttempted            = 0
+    Imported                   = 0
+    ImportFailed               = 0
+}
 
 Invoke-Safely -ScriptBlock {
     # Get list of backups from manifest; fallback to backup.xml discovery if manifest is missing.
@@ -123,24 +187,83 @@ Invoke-Safely -ScriptBlock {
     if (-not $backups -or $backups.Count -eq 0) {
         throw "No valid GPO backups were found in '$BackupPath'."
     }
-    
+    $script:GpoImportStats.BackupsDiscovered = @($backups).Count
+
+    # Pre-compute target names and detect collisions before importing.
+    $plan = @()
     foreach ($b in $backups) {
-        $gpoName = $b.GPODisplayName
-        $backupId = $b.ID
-        
-        # Check if GPO exists to ensure idempotency
-        $existing = Get-GPO -Name $gpoName -Server $TargetDomain -ErrorAction SilentlyContinue
-        if ($existing -and -not $Force) {
-            Write-Log -Message "GPO '$gpoName' already exists. Skipping (Use -Force to overwrite)." -Level WARN
+        $sourceName = [string]$b.GPODisplayName
+        $backupId = [string]$b.ID
+        $targetName = $sourceName
+        $isDefaultPolicy = $defaultPolicyNames -contains $sourceName
+        $skipByDefaultPolicyRule = $false
+
+        if ($isDefaultPolicy) {
+            if ($effectiveDefaultPolicyMode -eq 'Skip') {
+                $skipByDefaultPolicyRule = $true
+            } elseif ($effectiveDefaultPolicyMode -eq 'Rename') {
+                $targetName = "$sourceName$DefaultPolicyNameSuffix"
+            }
+        }
+
+        $plan += [PSCustomObject]@{
+            SourceName               = $sourceName
+            TargetName               = $targetName
+            BackupId                 = $backupId
+            IsDefaultPolicy          = $isDefaultPolicy
+            SkipByDefaultPolicyRule  = $skipByDefaultPolicyRule
+            SkipByDuplicateCollision = $false
+        }
+    }
+
+    $activePlan = @($plan | Where-Object { -not $_.SkipByDefaultPolicyRule })
+    $duplicateGroups = @($activePlan | Group-Object TargetName | Where-Object { $_.Count -gt 1 })
+    foreach ($dup in $duplicateGroups) {
+        $entries = @($dup.Group)
+        $keep = $entries | Select-Object -First 1
+        $dupeIds = ($entries | ForEach-Object { $_.BackupId }) -join ', '
+        Write-Log -Message "Duplicate GPO backup names detected for target '$($dup.Name)' (Backup IDs: $dupeIds). Keeping first backup '$($keep.BackupId)' and skipping the rest." -Level WARN
+
+        $entries | Select-Object -Skip 1 | ForEach-Object {
+            $_.SkipByDuplicateCollision = $true
+        }
+    }
+    
+    foreach ($entry in $plan) {
+        $gpoName = $entry.SourceName
+        $backupId = $entry.BackupId
+        $targetGpoName = $entry.TargetName
+
+        if ($entry.SkipByDefaultPolicyRule) {
+            $script:GpoImportStats.SkippedDefaultPolicy++
+            Write-Log -Message "Skipping '$gpoName' by default. Built-in default domain policies should typically be managed natively in the target domain." -Level WARN
             continue
         }
 
-        Write-Log -Message "Importing GPO: '$gpoName' (ID: $backupId)" -Level INFO
+        if ($entry.IsDefaultPolicy -and $effectiveDefaultPolicyMode -eq 'Rename') {
+            Write-Log -Message "Importing built-in policy '$gpoName' as renamed copy '$targetGpoName'." -Level WARN
+        }
+
+        if ($entry.SkipByDuplicateCollision) {
+            $script:GpoImportStats.SkippedDuplicateCollision++
+            Write-Log -Message "Skipping duplicate backup '$backupId' for GPO '$gpoName' because target name '$targetGpoName' already has a selected backup in this run." -Level WARN
+            continue
+        }
+        
+        # Check if GPO exists to ensure idempotency
+        $existing = Get-GPO -Name $targetGpoName -Server $TargetDomain -ErrorAction SilentlyContinue
+        if ($existing -and -not $Force) {
+            $script:GpoImportStats.SkippedExisting++
+            Write-Log -Message "GPO '$targetGpoName' already exists. Skipping (Use -Force to overwrite)." -Level WARN
+            continue
+        }
+
+        Write-Log -Message "Importing GPO: '$gpoName' as '$targetGpoName' (ID: $backupId)" -Level INFO
         
         $params = @{
             BackupId       = $backupId
             Path           = $BackupPath
-            TargetName     = $gpoName
+            TargetName     = $targetGpoName
             Domain         = $TargetDomain
             CreateIfNeeded = $true
             ErrorAction    = 'Stop'
@@ -151,12 +274,33 @@ Invoke-Safely -ScriptBlock {
         }
         
         try {
-            if ($PSCmdlet.ShouldProcess($gpoName, "Import GPO")) {
+            if ($PSCmdlet.ShouldProcess($targetGpoName, "Import GPO")) {
+                $script:GpoImportStats.ImportAttempted++
                 Import-GPO @params | Out-Null
-                Write-Log -Message "Successfully imported '$gpoName'" -Level INFO
+                $script:GpoImportStats.Imported++
+                Write-Log -Message "Successfully imported '$targetGpoName'" -Level INFO
             }
         } catch {
-            Write-Log -Message "Failed to import '$gpoName': $_" -Level ERROR
+            $script:GpoImportStats.ImportFailed++
+            Write-Log -Message "Failed to import '$targetGpoName' (source backup '$gpoName'): $_" -Level ERROR
         }
     }
 } -Operation "Import GPOs"
+
+$warningCount =
+    $script:GpoImportStats.SkippedDefaultPolicy +
+    $script:GpoImportStats.SkippedDuplicateCollision +
+    $script:GpoImportStats.SkippedExisting +
+    $script:GpoImportStats.ImportFailed
+
+$summary = "Import GPOs summary: BackupsDiscovered=$($script:GpoImportStats.BackupsDiscovered), Attempted=$($script:GpoImportStats.ImportAttempted), Imported=$($script:GpoImportStats.Imported), Failed=$($script:GpoImportStats.ImportFailed), SkippedExisting=$($script:GpoImportStats.SkippedExisting), SkippedDefaultPolicy=$($script:GpoImportStats.SkippedDefaultPolicy), SkippedDuplicateCollision=$($script:GpoImportStats.SkippedDuplicateCollision)"
+
+if ($script:GpoImportStats.Imported -eq 0 -and $script:GpoImportStats.BackupsDiscovered -gt 0) {
+    Write-Host "[!] WARNING: Import-GPOs created 0 new GPOs. See logs for skip/failure reasons." -ForegroundColor Yellow
+}
+
+if ($warningCount -gt 0) {
+    Write-Log -Message "Import GPOs succeeded with warnings. $summary" -Level WARN
+} else {
+    Write-Log -Message "Import GPOs succeeded. $summary" -Level INFO
+}
