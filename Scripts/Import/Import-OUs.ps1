@@ -65,8 +65,13 @@ Invoke-Safely -ScriptBlock {
                 Write-Log -Message "OU already exists: $targetDN" -Level INFO
                 $script:OuStats.Skipped++
             } catch {
-                Write-Log -Message "Failed to create $targetDN : $_" -Level ERROR
-                $script:OuStats.Failed++
+                if ($_.Exception.Message -match "already in use" -or $_.Exception.Message -match "already exists") {
+                    Write-Log -Message "OU already exists: $targetDN" -Level INFO
+                    $script:OuStats.Skipped++
+                } else {
+                    Write-Log -Message "Failed to create $targetDN : $_" -Level ERROR
+                    $script:OuStats.Failed++
+                }
             }
         } else {
             Write-Log -Message "Skipping invalid TargetDN format: $targetDN" -Level WARN
@@ -79,7 +84,7 @@ $summary = "Import OUs summary: Evaluated=$($script:OuStats.Evaluated), Created=
 
 if ($warningCount -gt 0) {
     Write-Host "[!] WARNING: OU Import encountered $warningCount failure(s). See logs for details." -ForegroundColor Yellow
-    Write-Log -Message "Import OUs succeeded with warnings. $summary" -Level WARN
+    Write-Log -Message "Import OUs completed with warnings. $summary" -Level WARN
 } else {
-    Write-Log -Message "Import OUs succeeded. $summary" -Level INFO
+    Write-Log -Message "Import OUs completed. $summary" -Level INFO
 }

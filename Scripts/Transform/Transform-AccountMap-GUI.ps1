@@ -228,6 +228,7 @@ function Get-TargetOUs {
         $baseDn = $rootDse.defaultNamingContext
         $script:targetOUs = @(Get-ADOrganizationalUnit -Filter * -SearchBase $baseDn -Server $targetDomain -ErrorAction Stop |
             Select-Object -ExpandProperty DistinguishedName |
+            Where-Object { $_ -notmatch "(?:^|,)OU=Domain Controllers," } |
             Sort-Object -Unique)
 
         foreach ($gridPath in $script:grids.Keys) {

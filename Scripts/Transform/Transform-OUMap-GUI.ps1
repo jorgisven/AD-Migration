@@ -320,6 +320,9 @@ $btnUndo.Add_Click({ Undo-Action })
 # Populate Source Tree
 $treeSource.BeginUpdate()
 foreach ($ou in $SourceOUs) {
+    # Hide the Domain Controllers OU (and any children) from the source tree to reduce clutter
+    if ($ou.DistinguishedName -match "(?:^|,)OU=Domain Controllers,") { continue }
+
     $tag = @{
         SourceDN = $ou.DistinguishedName
         Description = $ou.Description
@@ -428,8 +431,8 @@ $treeTarget.Add_DragDrop({
 
     # Handle MERGE action (dragging from source onto an existing target node)
     if ($targetNode -and $draggedNode -and ($draggedNode.TreeView -eq $treeSource)) {
-        # A node with a Tag is either pre-existing or already mapped.
-        if ($targetNode.Tag) {
+        # Prompt if dropping onto any OU (whether pre-existing, mapped, or newly created)
+        if ($targetNode.Text -match "^OU=") {
             $mergeForm = New-Object System.Windows.Forms.Form
             $mergeForm.Text = "Merge or Add as Child?"
             $mergeForm.Size = New-Object System.Drawing.Size(460, 200)

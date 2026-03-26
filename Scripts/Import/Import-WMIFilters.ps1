@@ -93,7 +93,7 @@ $summary = "Import WMI Filters summary: Evaluated=$($script:WmiStats.Evaluated),
 
 if ($warningCount -gt 0) {
     Write-Host "[!] WARNING: WMI Filter Import encountered $warningCount failure(s). See logs for details." -ForegroundColor Yellow
-    Write-Log -Message "Import WMI Filters succeeded with warnings. $summary" -Level WARN
+    Write-Log -Message "Import WMI Filters completed with warnings. $summary" -Level WARN
 } else {
-    Write-Log -Message "Import WMI Filters succeeded. $summary" -Level INFO
+    Write-Log -Message "Import WMI Filters completed. $summary" -Level INFO
 }

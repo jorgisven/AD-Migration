@@ -19,7 +19,10 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateSet('Prompt', 'Skip', 'Rename')]
-    [string]$DefaultDomainPolicyMode = 'Prompt'
+    [string]$DefaultDomainPolicyMode = 'Prompt',
+
+    [Parameter(Mandatory = $false)]
+    [switch]$EnableLinks
 )
 
 # Import module and config
@@ -157,6 +160,12 @@ if ($effectiveDefaultPolicyMode -eq 'Rename' -and [string]::IsNullOrWhiteSpace($
 Write-Log -Message "Default domain policy handling mode for links: $effectiveDefaultPolicyMode" -Level INFO
 Write-Log -Message "Default domain policy options for links: Mode='$effectiveDefaultPolicyMode', Suffix='$DefaultPolicyNameSuffix'" -Level INFO
 
+if (-not $EnableLinks) {
+    Write-Log -Message "Safety Feature Active: All new GPO links will be created in a DISABLED state by default." -Level INFO
+} else {
+    Write-Log -Message "GPO links will be restored to their original enabled/disabled state." -Level INFO
+}
+
 Write-Log -Message "Starting GPO Link Rebuild..." -Level INFO
 
 $script:LinkStats = [ordered]@{
@@ -208,7 +217,7 @@ Invoke-Safely -ScriptBlock {
                     $targetSOM = $OUMapByDN[$sourceSomKey]
                 } elseif (-not [string]::IsNullOrWhiteSpace($sourceSomCanonical) -and $OUMapByCanonical.ContainsKey($sourceSomCanonical)) {
                     $targetSOM = $OUMapByCanonical[$sourceSomCanonical]
-                } elseif ($sourceSomText -match '^\s*(DC=[^,]+\s*(,\s*DC=[^,]+\s*)*)$') {
+                } elseif ($sourceSomText -match '^\s*(DC=[^,]+\s*(,\s*DC=[^,]+\s*)*)$' -or ($sourceSomText -notmatch '=' -and $sourceSomText -notmatch '/' -and $sourceSomText -match '\.')) {
                     # If linked to Domain Root, map to Target Domain Root
                     $targetSOM = $TargetDomain # Simplified, assumes domain root link
                 }
@@ -220,11 +229,12 @@ Invoke-Safely -ScriptBlock {
                         # New-GPLink throws if GPO doesn't exist, but we assume Import-GPOs ran
                         
                         if ($PSCmdlet.ShouldProcess($targetSOM, "Link GPO '$gpoName'") -and -not $WhatIfPreference) {
-                            $linkEnabledVal = if ($link.Enabled -eq 'true') { 'Yes' } else { 'No' }
+                            $linkEnabledVal = if ($EnableLinks -and $link.Enabled -eq 'true') { 'Yes' } else { 'No' }
                             $linkEnforcedVal = if ($link.NoOverride -eq 'true') { 'Yes' } else { 'No' }
                             New-GPLink -Name $gpoName -Target $targetSOM -LinkEnabled $linkEnabledVal -Enforced $linkEnforcedVal -Server $TargetDomain -ErrorAction Stop | Out-Null
                             $script:LinkStats.Linked++
-                            Write-Log -Message "Linked '$gpoName' to '$targetSOM'" -Level INFO
+                            $stateMsg = if ($linkEnabledVal -eq 'Yes') { "Enabled" } else { "Disabled" }
+                            Write-Log -Message "Linked '$gpoName' to '$targetSOM' (State: $stateMsg)" -Level INFO
                         }
                     } catch {
                         if ($_.Exception.Message -match "already linked") {
@@ -330,7 +340,7 @@ $warningCount =
 $summary = "Rebuild GPO Links summary: GPOs=$($script:LinkStats.GposProcessed), LinksEvaluated=$($script:LinkStats.LinksEvaluated), Linked=$($script:LinkStats.Linked), AlreadyLinked=$($script:LinkStats.AlreadyLinked), SkippedDefaultPolicies=$($script:LinkStats.SkippedDefaultPolicies), SkippedMissingOUMap=$($script:LinkStats.SkippedMissingOUMap), LinkFailures=$($script:LinkStats.LinkFailures), WMIFilterFailures=$($script:LinkStats.WmiFilterFailures), SecurityFilterFailures=$($script:LinkStats.SecurityFilterFailures), AuthUsersRemovalFailures=$($script:LinkStats.AuthenticatedUsersRemovalsFailed)"
 
 if ($warningCount -gt 0) {
-    Write-Log -Message "Rebuild GPO Links succeeded with warnings. $summary" -Level WARN
+    Write-Log -Message "Rebuild GPO Links completed with warnings. $summary" -Level WARN
 } else {
-    Write-Log -Message "Rebuild GPO Links succeeded. $summary" -Level INFO
+    Write-Log -Message "Rebuild GPO Links completed. $summary" -Level INFO
 }

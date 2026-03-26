@@ -43,7 +43,7 @@ $GroupMap = Import-Csv $groupMapFile
 # Build Translation Dictionary for Memberships (SourceSam -> TargetSam)
 $IdentityMap = @{}
 foreach ($u in $UserMap) { if ($u.Action -ne 'Skip') { $IdentityMap[$u.SourceSam] = $u.TargetSam } }
-foreach ($c in $CompMap) { if ($c.Action -ne 'Skip') { $IdentityMap[$c.SourceName] = $c.TargetName } }
+foreach ($c in $CompMap) { if ($c.Action -ne 'Skip') { $IdentityMap[$c.SourceName] = "$($c.TargetName)$" } }
 foreach ($g in $GroupMap) { if ($g.Action -ne 'Skip') { $IdentityMap[$g.SourceSam] = $g.TargetSam } }
 
 # --- 2. Load Exported Attributes ---
@@ -440,8 +440,8 @@ $summary = "Account Import summary: Users (Created=$($script:AccountStats.UsersC
 
 if ($warningCount -gt 0) {
     Write-Host "`n[!] WARNING: Account Import encountered $warningCount failure(s). See logs for details." -ForegroundColor Yellow
-    Write-Log -Message "Import Accounts succeeded with warnings. $summary" -Level WARN
+    Write-Log -Message "Import Accounts completed with warnings. $summary" -Level WARN
 } else {
     Write-Host "`n=== Account Import Complete ===" -ForegroundColor Green
-    Write-Log -Message "Import Accounts succeeded. $summary" -Level INFO
+    Write-Log -Message "Import Accounts completed. $summary" -Level INFO
 }

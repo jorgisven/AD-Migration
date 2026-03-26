@@ -143,69 +143,58 @@ $script:GpoImportStats = [ordered]@{
 }
 
 Invoke-Safely -ScriptBlock {
-    # Get list of backups from manifest; fallback to backup.xml discovery if manifest is missing.
-    $manifestPath = Join-Path $BackupPath "manifest.xml"
-    $manifestPathAlt = Join-Path $BackupPath "Manifest.xml"
-    $statusCsvFiles = Get-ChildItem -Path $BackupPath -Filter "_GPO_Backup_Status_*.csv" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+    # 1. Discover Backups directly from bkupInfo.xml files
+    # We avoid the CSV and old manifest files because they may incorrectly map the GPO ID instead of the Backup ID.
+    $backupXmlFiles = Get-ChildItem -Path $BackupPath -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "^(?:bkupInfo|backup)\.xml$" }
     $backups = @()
 
-    if (Test-Path $manifestPath) {
-        [xml]$manifest = Get-Content $manifestPath
-        $backups = @($manifest.Backups.BackupInst)
-        Write-Log -Message "Loaded $($backups.Count) GPO backup entries from manifest.xml." -Level INFO
-    } elseif (Test-Path $manifestPathAlt) {
-        [xml]$manifest = Get-Content $manifestPathAlt
-        $backups = @($manifest.Backups.BackupInst)
-        Write-Log -Message "Loaded $($backups.Count) GPO backup entries from Manifest.xml." -Level INFO
-    } elseif ($statusCsvFiles.Count -gt 0) {
-        $csvData = Import-Csv $statusCsvFiles[0].FullName
-        foreach ($row in $csvData) {
-            if ($row.BackupStatus -eq 'Succeeded' -and -not [string]::IsNullOrWhiteSpace($row.GPOID) -and -not [string]::IsNullOrWhiteSpace($row.GPOName)) {
+    foreach ($backupXml in $backupXmlFiles) {
+        try {
+            $name = ""
+
+            # Use Select-Xml with XPath for robust, namespace-aware parsing.
+            $ns = @{
+                gpo = "http://www.microsoft.com/GroupPolicy/Settings"
+                gpm = "http://www.microsoft.com/GroupPolicy/BackupManifest"
+            }
+            $nameNode = Select-Xml -Path $backupXml.FullName -XPath "//gpo:Name | //gpm:GPODisplayName" -Namespace $ns | Select-Object -First 1
+            if ($nameNode) {
+                $name = $nameNode.Node.InnerText.Trim()
+            }
+
+            # The Backup ID is strictly the name of the folder containing the XML
+            $id = $backupXml.Directory.Name
+
+            # Ensure folder name is actually a valid GUID format
+            if ($id -match '^\{?[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\}?$' -and -not [string]::IsNullOrWhiteSpace($name)) {
                 $backups += [PSCustomObject]@{
-                    ID = $row.GPOID
-                    GPODisplayName = $row.GPOName
+                    ID             = $id
+                    GPODisplayName = $name
                 }
+            } else {
+                Write-Log -Message "Skipped folder '$id': Could not extract valid GPO Name or Backup ID." -Level WARN
             }
+        } catch {
+            Write-Log -Message "Failed parsing backup descriptor '$($backupXml.FullName)': $($_.Exception.Message)" -Level WARN
         }
-        Write-Log -Message "Loaded $($backups.Count) GPO backup entries from $($statusCsvFiles[0].Name)." -Level INFO
-    } else {
-        Write-Log -Message "Backup manifest and status CSV were not found in '$BackupPath'. Falling back to backup.xml discovery." -Level WARN
-
-        $backupXmlFiles = Get-ChildItem -Path $BackupPath -Filter "backup.xml" -Recurse -File -ErrorAction SilentlyContinue
-        foreach ($backupXml in $backupXmlFiles) {
-            try {
-                [xml]$backupDoc = Get-Content $backupXml.FullName
-                $idNode = $backupDoc.SelectSingleNode("//*[local-name()='ID']")
-                $nameNode = $backupDoc.SelectSingleNode("//*[local-name()='GPODisplayName']")
-                if (-not $nameNode) { $nameNode = $backupDoc.SelectSingleNode("//*[local-name()='Name']") }
-                $id = if ($idNode) { [string]$idNode.InnerText } else { $backupXml.Directory.Name }
-                $name = if ($nameNode) { [string]$nameNode.InnerText } else { "" }
-
-                if (-not [string]::IsNullOrWhiteSpace($id) -and -not [string]::IsNullOrWhiteSpace($name)) {
-                    $backups += [PSCustomObject]@{
-                        ID             = $id
-                        GPODisplayName = $name
-                    }
-                }
-            } catch {
-                Write-Log -Message "Failed parsing backup descriptor '$($backupXml.FullName)': $($_.Exception.Message)" -Level WARN
-            }
-        }
+    }
 
         # De-duplicate by backup ID in case of repeated reads.
         $backups = @($backups | Group-Object ID | ForEach-Object { $_.Group | Select-Object -First 1 })
-        Write-Log -Message "Discovered $($backups.Count) GPO backup entries via backup.xml fallback." -Level INFO
-    }
 
     if (-not $backups -or $backups.Count -eq 0) {
         throw "No valid GPO backups were found in '$BackupPath'."
     }
     $script:GpoImportStats.BackupsDiscovered = @($backups).Count
 
-    # Generate manifest.xml if missing (Import-GPO strictly requires it to map BackupId to folders)
+    # 2. Always regenerate manifest.xml with verified Backup IDs
     $manifestTarget = Join-Path $BackupPath "manifest.xml"
-    if (-not (Test-Path $manifestTarget) -and -not (Test-Path (Join-Path $BackupPath "Manifest.xml"))) {
-        Write-Log -Message "Generating missing manifest.xml to satisfy Import-GPO cmdlet requirements..." -Level INFO
+    $manifestTargetAlt = Join-Path $BackupPath "Manifest.xml"
+    
+    if (Test-Path $manifestTarget) { Remove-Item -Path $manifestTarget -Force }
+    if (Test-Path $manifestTargetAlt) { Remove-Item -Path $manifestTargetAlt -Force }
+    
+    Write-Log -Message "Generating verified manifest.xml to satisfy Import-GPO cmdlet requirements..." -Level INFO
         $sb = New-Object System.Text.StringBuilder
         $sb.AppendLine('<?xml version="1.0" encoding="utf-8"?>') | Out-Null
         $sb.AppendLine('<Backups xmlns="http://www.microsoft.com/GroupPolicy/BackupManifest">') | Out-Null
@@ -220,7 +209,6 @@ Invoke-Safely -ScriptBlock {
         }
         $sb.AppendLine('</Backups>') | Out-Null
         Set-Content -Path $manifestTarget -Value $sb.ToString() -Encoding UTF8
-    }
 
     # Pre-compute target names and detect collisions before importing.
     $plan = @()
@@ -333,7 +321,7 @@ if ($script:GpoImportStats.Imported -eq 0 -and $script:GpoImportStats.BackupsDis
 }
 
 if ($warningCount -gt 0) {
-    Write-Log -Message "Import GPOs succeeded with warnings. $summary" -Level WARN
+    Write-Log -Message "Import GPOs completed with warnings. $summary" -Level WARN
 } else {
-    Write-Log -Message "Import GPOs succeeded. $summary" -Level INFO
+    Write-Log -Message "Import GPOs completed. $summary" -Level INFO
 }

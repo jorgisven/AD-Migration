@@ -64,7 +64,7 @@ foreach ($xmlFile in $xmlFiles) {
             $status = "OK"
             $notes = ""
 
-            if ($sourceSOM -match "DC=") {
+            if ($sourceSOM -match "DC=" -or ($sourceSOM -notmatch '=' -and $sourceSOM -match '\.')) {
                 # Check Map
                 if ($OUMap.ContainsKey($sourceSOM)) {
                     if ($OUSkip.ContainsKey($sourceSOM)) {
@@ -73,7 +73,7 @@ foreach ($xmlFile in $xmlFiles) {
                     } else {
                         $notes = "Maps to: " + $OUMap[$sourceSOM]
                     }
-                } elseif ($sourceSOM -match "^DC=") {
+                } elseif ($sourceSOM -match "^\s*DC=" -or ($sourceSOM -notmatch '=' -and $sourceSOM -notmatch '/' -and $sourceSOM -match '\.')) {
                     $status = "Info"
                     $notes = "Domain Root link (will map to Target Root)."
                 } else {

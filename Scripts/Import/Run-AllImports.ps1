@@ -416,7 +416,7 @@ for ($i = $startIndex; $i -lt $scripts.Count; $i++) {
             }
             $importState.failedScripts = @($importState.failedScripts | Where-Object { $_ -ne $script })
             Save-ImportState -State $importState
-            Write-Log -Message "Import step '$script' completed successfully." -Level INFO
+            Write-Log -Message "Import step '$script' completed." -Level INFO
         } catch {
             $errMsg = $_.Exception.Message
             Write-Host "[-] CRITICAL ERROR running $($script): $errMsg" -ForegroundColor Red
@@ -471,6 +471,6 @@ if ($failedScripts.Count -gt 0) {
     $importState.status = 'completed'
     Save-ImportState -State $importState
     Write-Host "`n=== Import Sequence Complete ===" -ForegroundColor Cyan
-    Write-Log -Message "Import sequence completed successfully for domain '$TargetDomain'." -Level INFO
-    [System.Windows.Forms.MessageBox]::Show("All import scripts completed successfully.`n`nPlease proceed to the validation phase.", "Import Complete", "OK", "Information")
+    Write-Log -Message "Import sequence completed for domain '$TargetDomain'." -Level INFO
+    [System.Windows.Forms.MessageBox]::Show("All import scripts completed.`n`nPlease proceed to the validation phase.", "Import Complete", "OK", "Information")
 }

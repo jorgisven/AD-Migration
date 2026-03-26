@@ -29,7 +29,8 @@ Add-Type -AssemblyName System.Drawing
 function Show-ConflictDialog {
     param(
         [string]$Message,
-        [string]$Title
+        [string]$Title,
+        [switch]$AllowKeepBoth
     )
     
     $form = New-Object System.Windows.Forms.Form
@@ -62,11 +63,20 @@ function Show-ConflictDialog {
     $btnOverwrite.DialogResult = [System.Windows.Forms.DialogResult]::Yes
     $form.Controls.Add($btnOverwrite)
     
+    if ($AllowKeepBoth) {
+        $btnKeepBoth = New-Object System.Windows.Forms.Button
+        $btnKeepBoth.Text = "Keep Both"
+        $btnKeepBoth.Location = New-Object System.Drawing.Point(300, 110)
+        $btnKeepBoth.DialogResult = [System.Windows.Forms.DialogResult]::Ignore
+        $form.Controls.Add($btnKeepBoth)
+    }
+
     $form.AcceptButton = $btnOverwrite
     $form.CancelButton = $btnSkip
     $result = $form.ShowDialog()
 
-    return @{ Action = if ($result -eq 'Yes') { 'Overwrite' } else { 'Skip' }; ApplyAll = $chkAll.Checked }
+    $action = if ($result -eq 'Yes') { 'Overwrite' } elseif ($result -eq 'Ignore') { 'KeepBoth' } else { 'Skip' }
+    return @{ Action = $action; ApplyAll = $chkAll.Checked }
 }
 
 $config = Get-ADMigrationConfig
@@ -105,6 +115,7 @@ if ($dnsWarningResult -eq 'No') {
 
 # Global conflict preferences (Prompt, Overwrite, Skip)
 $GlobalRecordAction = "Prompt"
+$GlobalIpConflictAction = "Prompt"
 
 $script:DnsStats = [ordered]@{
     ZonesEvaluated   = 0
@@ -168,6 +179,8 @@ Invoke-Safely -ScriptBlock {
         }
     }
 
+    $zoneCache = @{}
+
     # 3. Process Records
     foreach ($r in $Records) {
         $script:DnsStats.RecordsEvaluated++
@@ -186,6 +199,66 @@ Invoke-Safely -ScriptBlock {
         if ($type -eq "SOA" -or $type -eq "NS") { 
             $script:DnsStats.RecordsSkipped++
             continue 
+        }
+
+        # Flag Zone Apex A/AAAA records in logs (Usually Domain Controllers or Root Web Servers)
+        if ($hostName -eq "@" -and $type -in @('A', 'AAAA')) {
+            Write-Log -Message "Notice: Importing Zone Apex (@) $type record pointing to IP '$data' in zone '$zName'. Ensure this IP is correct for the target environment." -Level WARN
+        }
+
+        # IP Conflict Check
+        if (-not $zoneCache.ContainsKey($zName)) {
+            $zoneCache[$zName] = Get-DnsServerResourceRecord -ZoneName $zName -ComputerName $TargetServer -ErrorAction SilentlyContinue
+        }
+        $existingTargetRecords = $zoneCache[$zName]
+
+        $skipDueToIpConflict = $false
+        if ($type -in @('A', 'AAAA')) {
+            $ipConflicts = @($existingTargetRecords | Where-Object {
+                $_.HostName -ne $hostName -and (
+                    ($_.RecordType -eq 'A' -and $_.RecordData.IPv4Address.ToString() -eq $data) -or
+                    ($_.RecordType -eq 'AAAA' -and $_.RecordData.IPv6Address.ToString() -eq $data)
+                )
+            })
+
+            if ($ipConflicts.Count -gt 0) {
+                $conflictNames = ($ipConflicts.HostName | Select-Object -Unique) -join ', '
+                $action = "Skip"
+                
+                if ($GlobalIpConflictAction -eq "Prompt") {
+                    $res = Show-ConflictDialog -Message "IP Conflict in zone '$zName'.`nSource record '$hostName' uses IP '$data', but this IP is already used by target record(s): $conflictNames.`n`nKeep Both will allow multiple names to share this IP." -Title "IP Conflict Detected" -AllowKeepBoth
+                    $action = $res.Action
+                    if ($res.ApplyAll) { $GlobalIpConflictAction = $action }
+                } else {
+                    $action = $GlobalIpConflictAction
+                }
+
+                if ($action -eq "Overwrite") {
+                    Write-Log -Message "Overwriting IP Conflict: Deleting existing records using IP '$data' ($conflictNames) in $zName" -Level INFO
+                    try {
+                        foreach ($conflict in $ipConflicts) {
+                            Get-DnsServerResourceRecord -ZoneName $zName -Name $conflict.HostName -RecordType $conflict.RecordType -ComputerName $TargetServer -ErrorAction SilentlyContinue |
+                                Remove-DnsServerResourceRecord -ZoneName $zName -ComputerName $TargetServer -Force -Confirm:$false -ErrorAction Stop
+                        }
+                        # Update cache to remove them
+                        $zoneCache[$zName] = $zoneCache[$zName] | Where-Object { $_.HostName -notin $ipConflicts.HostName }
+                    } catch {
+                        $script:DnsStats.RecordsFailed++
+                        Write-Log -Message "Failed to remove conflicting IP record: $_" -Level ERROR
+                        $skipDueToIpConflict = $true
+                    }
+                } elseif ($action -eq "KeepBoth") {
+                    Write-Log -Message "Keeping both records for IP '$data' (Existing: $conflictNames, New: $hostName)." -Level INFO
+                } else {
+                    $script:DnsStats.RecordsSkipped++
+                    Write-Log -Message "Skipping record '$hostName' due to IP conflict with '$conflictNames' on IP '$data'." -Level INFO
+                    $skipDueToIpConflict = $true
+                }
+            }
+        }
+
+        if ($skipDueToIpConflict) {
+            continue
         }
 
         $retry = $true
@@ -253,7 +326,7 @@ $summary = "DNS Import summary: Zones (Eval=$($script:DnsStats.ZonesEvaluated), 
 
 if ($warningCount -gt 0) {
     Write-Host "[!] WARNING: DNS Import encountered $warningCount failure(s). See logs for details." -ForegroundColor Yellow
-    Write-Log -Message "Import DNS Records succeeded with warnings. $summary" -Level WARN
+    Write-Log -Message "Import DNS Records completed with warnings. $summary" -Level WARN
 } else {
-    Write-Log -Message "Import DNS Records succeeded. $summary" -Level INFO
+    Write-Log -Message "Import DNS Records completed. $summary" -Level INFO
 }
