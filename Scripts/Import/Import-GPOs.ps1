@@ -567,6 +567,7 @@ $script:GpoImportStats = [ordered]@{
     SkippedDefaultPolicy       = 0
     SkippedDuplicateCollision  = 0
     SkippedExisting            = 0
+    SkippedByShouldProcess     = 0
     ImportAttempted            = 0
     Imported                   = 0
     ImportFailed               = 0
@@ -575,6 +576,7 @@ $script:GpoImportStats = [ordered]@{
     CorruptedBackupNames       = @()
     ExistingGpoNames           = @()
     NewlyImportedGpoNames      = @()
+    SkippedByShouldProcessNames = @()
     FailedGpoNames             = @()
 }
 
@@ -804,6 +806,7 @@ Invoke-Safely -ScriptBlock {
         }
 
         $importedCurrent = $false
+        $skippedByShouldProcess = $false
         $lastErrorMessage = ''
         $stopDueToInvalidData = $false
 
@@ -814,7 +817,7 @@ Invoke-Safely -ScriptBlock {
 
         Write-Log -Message "Prepared $($strategies.Count) import strategy(ies) for '$targetGpoName'." -Level INFO
 
-        if ($PSCmdlet.ShouldProcess($targetGpoName, "Import GPO") -and -not $WhatIfPreference) {
+        if ($PSCmdlet.ShouldProcess($targetGpoName, "Import GPO")) {
             $script:GpoImportStats.ImportAttempted++
 
             foreach ($strategy in $strategies) {
@@ -876,6 +879,11 @@ Invoke-Safely -ScriptBlock {
             }
         } elseif ([string]::IsNullOrWhiteSpace($lastErrorMessage)) {
             $lastErrorMessage = "Import was not attempted because ShouldProcess returned false or WhatIf mode is active."
+            $skippedByShouldProcess = $true
+            $script:GpoImportStats.SkippedByShouldProcess++
+            if ($script:GpoImportStats.SkippedByShouldProcessNames -notcontains $targetGpoName) {
+                $script:GpoImportStats.SkippedByShouldProcessNames += $targetGpoName
+            }
             Write-Log -Message "No import attempt executed for '$targetGpoName': $lastErrorMessage" -Level WARN
         }
 
@@ -883,7 +891,7 @@ Invoke-Safely -ScriptBlock {
             $lastErrorMessage = "Import attempt did not complete successfully, but no specific error message was captured."
         }
 
-        if (-not $importedCurrent) {
+        if (-not $importedCurrent -and -not $skippedByShouldProcess) {
             $script:GpoImportStats.ImportFailed++
             if ($script:GpoImportStats.FailedGpoNames -notcontains $targetGpoName) {
                 $script:GpoImportStats.FailedGpoNames += $targetGpoName
@@ -897,9 +905,10 @@ $warningCount =
     $script:GpoImportStats.SkippedDefaultPolicy +
     $script:GpoImportStats.SkippedDuplicateCollision +
     $script:GpoImportStats.SkippedExisting +
+    $script:GpoImportStats.SkippedByShouldProcess +
     $script:GpoImportStats.ImportFailed
 
-$summary = "Import GPOs summary: BackupsDiscovered=$($script:GpoImportStats.BackupsDiscovered), Attempted=$($script:GpoImportStats.ImportAttempted), Imported=$($script:GpoImportStats.Imported), ImportedWithoutMigTable=$($script:GpoImportStats.ImportedWithoutMigTable), Failed=$($script:GpoImportStats.ImportFailed), InvalidBackupDataDetected=$($script:GpoImportStats.InvalidBackupDataDetected), SkippedExisting=$($script:GpoImportStats.SkippedExisting), SkippedDefaultPolicy=$($script:GpoImportStats.SkippedDefaultPolicy), SkippedDuplicateCollision=$($script:GpoImportStats.SkippedDuplicateCollision)"
+$summary = "Import GPOs summary: BackupsDiscovered=$($script:GpoImportStats.BackupsDiscovered), Attempted=$($script:GpoImportStats.ImportAttempted), Imported=$($script:GpoImportStats.Imported), ImportedWithoutMigTable=$($script:GpoImportStats.ImportedWithoutMigTable), Failed=$($script:GpoImportStats.ImportFailed), InvalidBackupDataDetected=$($script:GpoImportStats.InvalidBackupDataDetected), SkippedExisting=$($script:GpoImportStats.SkippedExisting), SkippedDefaultPolicy=$($script:GpoImportStats.SkippedDefaultPolicy), SkippedDuplicateCollision=$($script:GpoImportStats.SkippedDuplicateCollision), SkippedByShouldProcess=$($script:GpoImportStats.SkippedByShouldProcess)"
 
 if ($script:GpoImportStats.Imported -eq 0 -and $script:GpoImportStats.BackupsDiscovered -gt 0) {
     Write-Host "[!] WARNING: Import-GPOs created 0 new GPOs. See logs for skip/failure reasons." -ForegroundColor Yellow
@@ -936,7 +945,7 @@ if ($script:GpoImportStats.ExistingGpoNames.Count -gt 0) {
         Write-Host "    ✓ $_" -ForegroundColor Green
     }
     if ($Force) {
-        Write-Host "[*] (Use -Force next time to overwrite these)" -ForegroundColor Yellow
+        Write-Host "[*] To overwrite these entries in a future run, include -Force." -ForegroundColor Yellow
     }
 }
 
@@ -951,6 +960,13 @@ if ($script:GpoImportStats.FailedGpoNames.Count -gt 0) {
     Write-Host "`n[-] GPOs FAILED TO IMPORT (Retry in next run):" -ForegroundColor Red
     $script:GpoImportStats.FailedGpoNames | Sort-Object | ForEach-Object {
         Write-Host "    ✗ $_" -ForegroundColor Red
+    }
+}
+
+if ($script:GpoImportStats.SkippedByShouldProcessNames.Count -gt 0) {
+    Write-Host "`n[*] GPOs SKIPPED BY SHOULDPROCESS/WHATIF (No changes made):" -ForegroundColor Cyan
+    $script:GpoImportStats.SkippedByShouldProcessNames | Sort-Object | ForEach-Object {
+        Write-Host "    - $_" -ForegroundColor Cyan
     }
 }
 
@@ -981,7 +997,7 @@ if ($isPartialRun -and -not $SkipExistingOnly) {
     Write-Host "`n[*] RE-RUN INFORMATION:" -ForegroundColor Yellow
     Write-Host "[*] This run found $($script:GpoImportStats.ExistingGpoNames.Count) GPO(s) already in the target domain." -ForegroundColor Yellow
     Write-Host "[*] If you need to overwrite existing GPOs, re-run with the -Force flag." -ForegroundColor Yellow
-    Write-Host "[*] If you just want to verify what's already been imported, use -SkipExistingOnly flag." -ForegroundColor Yellow
+    Write-Host "[*] To verify existing imports without changes, run with -SkipExistingOnly." -ForegroundColor Yellow
 }
 
 if ($isRetryRun) {
@@ -995,7 +1011,7 @@ if ($isRetryRun) {
 
 if ($SkipExistingOnly) {
     Write-Host "`n[*] SKIP-EXISTING-ONLY MODE:" -ForegroundColor Cyan
-    Write-Host "[*] No imports were attempted in this run. Use this to:" -ForegroundColor Cyan
+    Write-Host "[*] No imports were attempted in this run. This mode is intended to:" -ForegroundColor Cyan
     Write-Host "[*]   - Audit which GPOs already exist in the target domain" -ForegroundColor Cyan
     Write-Host "[*]   - Verify migration progress without modifying anything" -ForegroundColor Cyan
 }
