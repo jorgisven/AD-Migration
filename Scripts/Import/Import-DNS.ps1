@@ -79,6 +79,87 @@ function Show-ConflictDialog {
     return @{ Action = $action; ApplyAll = $chkAll.Checked }
 }
 
+function Convert-IPv4ToUInt32 {
+    param([string]$IPv4Address)
+
+    $ipObj = $null
+    if (-not [System.Net.IPAddress]::TryParse($IPv4Address, [ref]$ipObj)) { return $null }
+    if ($ipObj.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { return $null }
+
+    $bytes = $ipObj.GetAddressBytes()
+    [array]::Reverse($bytes)
+    return [BitConverter]::ToUInt32($bytes, 0)
+}
+
+function Convert-SubnetMaskToPrefixLength {
+    param([string]$SubnetMask)
+
+    $maskValue = Convert-IPv4ToUInt32 -IPv4Address $SubnetMask
+    if ($null -eq $maskValue) { return $null }
+
+    $bits = [Convert]::ToString([uint32]$maskValue, 2)
+    return ($bits.ToCharArray() | Where-Object { $_ -eq '1' }).Count
+}
+
+function Test-IPv4InSubnet {
+    param(
+        [string]$IPv4Address,
+        [string]$NetworkAddress,
+        [int]$PrefixLength
+    )
+
+    if ($PrefixLength -lt 0 -or $PrefixLength -gt 32) { return $false }
+
+    $ipValue = Convert-IPv4ToUInt32 -IPv4Address $IPv4Address
+    $networkValue = Convert-IPv4ToUInt32 -IPv4Address $NetworkAddress
+    if ($null -eq $ipValue -or $null -eq $networkValue) { return $false }
+
+    $mask = if ($PrefixLength -eq 0) { [uint32]0 } else { ([uint32]::MaxValue -shl (32 - $PrefixLength)) }
+    return (($ipValue -band $mask) -eq ($networkValue -band $mask))
+}
+
+function Get-LocalIPv4Subnets {
+    $results = @()
+
+    try {
+        $netRows = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop | Where-Object {
+            $_.IPAddress -notlike '127.*' -and
+            $_.IPAddress -notlike '169.254.*' -and
+            $_.PrefixLength -ge 1 -and
+            $_.PrefixLength -le 32
+        }
+
+        foreach ($row in $netRows) {
+            $results += [PSCustomObject]@{
+                IPAddress    = [string]$row.IPAddress
+                PrefixLength = [int]$row.PrefixLength
+            }
+        }
+    } catch {
+        $cfgRows = Get-CimInstance Win32_NetworkAdapterConfiguration -ErrorAction SilentlyContinue | Where-Object { $_.IPEnabled -eq $true }
+        foreach ($cfg in $cfgRows) {
+            $ips = @($cfg.IPAddress)
+            $masks = @($cfg.IPSubnet)
+            for ($i = 0; $i -lt $ips.Count; $i++) {
+                $ip = [string]$ips[$i]
+                if ($ip -notmatch '^\d+\.\d+\.\d+\.\d+$') { continue }
+                if ($ip -like '127.*' -or $ip -like '169.254.*') { continue }
+
+                $mask = if ($i -lt $masks.Count) { [string]$masks[$i] } else { '' }
+                $prefix = Convert-SubnetMaskToPrefixLength -SubnetMask $mask
+                if ($null -eq $prefix) { continue }
+
+                $results += [PSCustomObject]@{
+                    IPAddress    = $ip
+                    PrefixLength = [int]$prefix
+                }
+            }
+        }
+    }
+
+    return @($results | Group-Object { "$($_.IPAddress)/$($_.PrefixLength)" } | ForEach-Object { $_.Group[0] })
+}
+
 $config = Get-ADMigrationConfig
 $TransformPath = Join-Path $config.TransformRoot 'DNS'
 $ExportPath = Join-Path $config.ExportRoot 'DNS'
@@ -146,6 +227,67 @@ Invoke-Safely -ScriptBlock {
     $Records = Import-Csv $recFile.FullName
 
     Write-Log -Message "Found $($Zones.Count) zones and $($Records.Count) records to process." -Level INFO
+
+    # Safety preflight: compare incoming A-record network ranges with local host IPv4 subnet ranges.
+    $incomingA = @($Records | Where-Object { $_.RecordType -eq 'A' -and ([string]$_.Data) -match '^\d+\.\d+\.\d+\.\d+$' })
+    $incomingUniqueIps = @($incomingA.Data | Sort-Object -Unique)
+    $localSubnets = @(Get-LocalIPv4Subnets)
+
+    if ($incomingUniqueIps.Count -gt 0 -and $localSubnets.Count -gt 0) {
+        $outsideSubnetCount = 0
+        foreach ($ip in $incomingUniqueIps) {
+            $inAnyLocalSubnet = $false
+            foreach ($local in $localSubnets) {
+                if (Test-IPv4InSubnet -IPv4Address $ip -NetworkAddress $local.IPAddress -PrefixLength $local.PrefixLength) {
+                    $inAnyLocalSubnet = $true
+                    break
+                }
+            }
+            if (-not $inAnyLocalSubnet) { $outsideSubnetCount++ }
+        }
+
+        $outsidePct = [math]::Round((100.0 * $outsideSubnetCount / [math]::Max(1, $incomingUniqueIps.Count)), 1)
+        $localSubnetText = ($localSubnets | ForEach-Object { "$($_.IPAddress)/$($_.PrefixLength)" } | Select-Object -First 5) -join ', '
+        if ([string]::IsNullOrWhiteSpace($localSubnetText)) { $localSubnetText = 'No local IPv4 subnet data available' }
+
+        $keepExactLikely = $false
+        if ($SourcePath -eq $TransformPath) {
+            $rawRecFile = Get-ChildItem -Path $ExportPath -Filter "DNS_Records_*.csv" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($rawRecFile) {
+                try {
+                    $rawRecords = Import-Csv $rawRecFile.FullName
+                    $rawASet = @($rawRecords | Where-Object { $_.RecordType -eq 'A' -and ([string]$_.Data) -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -ExpandProperty Data -Unique)
+                    if ($rawASet.Count -gt 0) {
+                        $overlap = @($incomingUniqueIps | Where-Object { $_ -in $rawASet }).Count
+                        $overlapPct = 100.0 * $overlap / $rawASet.Count
+                        if ($overlapPct -ge 90) { $keepExactLikely = $true }
+                        Write-Log -Message "DNS import preflight: A-record overlap with raw export is $([math]::Round($overlapPct,1))% (heuristic for Keep Exact IPs)." -Level INFO
+                    }
+                } catch {
+                    Write-Log -Message "DNS import preflight could not compare transformed and raw A-records: $($_.Exception.Message)" -Level WARN
+                }
+            }
+        }
+
+        if ($outsidePct -ge 70) {
+            $riskMsg = "Potential subnet mismatch detected before DNS import.`n`nIncoming unique A-record IPs: $($incomingUniqueIps.Count)`nIPs outside local host subnet ranges: $outsideSubnetCount ($outsidePct%)`nLocal host subnet(s): $localSubnetText"
+            if ($keepExactLikely) {
+                $riskMsg += "`n`nThe transformed DNS file appears to keep most original source A-record IPs (high overlap with raw export)."
+            }
+            $riskMsg += "`n`nExample risk: importing 10.x records while this host operates in 192.168.x ranges can create routing/address conflicts depending on your topology.`n`nContinue with DNS import?"
+
+            Write-Log -Message "DNS import preflight WARNING: subnet mismatch risk detected. OutsideLocalSubnet=$outsideSubnetCount/$($incomingUniqueIps.Count) ($outsidePct%). LocalSubnets='$localSubnetText'. KeepExactLikely=$keepExactLikely" -Level WARN
+            $riskResult = [System.Windows.Forms.MessageBox]::Show($riskMsg, "DNS Subnet Mismatch Warning", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($riskResult -eq 'No') {
+                Write-Log -Message "DNS Import cancelled by user due to subnet mismatch preflight warning." -Level WARN
+                throw "DNS Import cancelled by user after subnet mismatch warning."
+            }
+        } else {
+            Write-Log -Message "DNS import preflight passed: $outsideSubnetCount/$($incomingUniqueIps.Count) unique A-record IPs are outside local host subnet ranges ($outsidePct%)." -Level INFO
+        }
+    } else {
+        Write-Log -Message "DNS import preflight skipped subnet mismatch comparison (incoming A records or local IPv4 subnet data unavailable)." -Level INFO
+    }
 
     # 2. Process Zones
     foreach ($z in $Zones) {

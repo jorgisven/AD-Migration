@@ -63,6 +63,109 @@ if (Test-Path $emptyListFile) {
 
 Write-Log -Message "Starting GPO report export from domain: $SourceDomain" -Level INFO
 
+function Get-FirstXmlInnerText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [xml]$Document,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$LocalNames
+    )
+
+    foreach ($localName in $LocalNames) {
+        $nodes = $Document.SelectNodes("//*[local-name()='$localName']")
+        foreach ($node in @($nodes)) {
+            $value = ([string]$node.InnerText).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                return $value
+            }
+        }
+    }
+
+    return ''
+}
+
+function Get-GpoManifestEntriesFromBackupFolders {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $entries = @()
+    $folders = Get-ChildItem -Path $Path -Directory -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -match '^\{?[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\}?$'
+    }
+
+    foreach ($folder in $folders) {
+        $descriptor = @(
+            (Join-Path $folder.FullName 'Backup.xml'),
+            (Join-Path $folder.FullName 'backup.xml'),
+            (Join-Path $folder.FullName 'bkupInfo.xml')
+        ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+
+        if (-not $descriptor) { continue }
+
+        try {
+            [xml]$xml = Get-Content -LiteralPath $descriptor -ErrorAction Stop
+            $displayName = Get-FirstXmlInnerText -Document $xml -LocalNames @('GPODisplayName', 'Name')
+            if ([string]::IsNullOrWhiteSpace($displayName)) { continue }
+
+            $idValue = Get-FirstXmlInnerText -Document $xml -LocalNames @('BackupId', 'ID')
+            if ([string]::IsNullOrWhiteSpace($idValue)) { $idValue = $folder.Name }
+            $normalizedId = $idValue.Trim().TrimStart('{').TrimEnd('}')
+
+            if ($normalizedId -notmatch '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { continue }
+
+            $entries += [PSCustomObject]@{
+                ID             = "{$normalizedId}"
+                GPODisplayName = $displayName
+                BackupTime     = $folder.LastWriteTime.ToString('o')
+            }
+        } catch {
+            Write-Log -Message "Failed reading backup descriptor '$descriptor' while building manifest fallback: $($_.Exception.Message)" -Level WARN
+        }
+    }
+
+    return @($entries | Group-Object ID | ForEach-Object { $_.Group | Select-Object -First 1 })
+}
+
+function Write-GpoBackupManifest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter(Mandatory = $true)]
+        [object[]]$Entries
+    )
+
+    $manifestPath = Join-Path $Path 'manifest.xml'
+    $xmlSettings = New-Object System.Xml.XmlWriterSettings
+    $xmlSettings.Indent = $true
+    $xmlSettings.Encoding = [System.Text.UTF8Encoding]::new($false)
+
+    $writer = [System.Xml.XmlWriter]::Create($manifestPath, $xmlSettings)
+    try {
+        $writer.WriteStartDocument()
+        $writer.WriteStartElement('GPOBackupManifest')
+        $writer.WriteAttributeString('schemaVersion', '1.0')
+
+        foreach ($entry in $Entries) {
+            $writer.WriteStartElement('BackupInst')
+            $writer.WriteElementString('ID', [string]$entry.ID)
+            $writer.WriteElementString('GPODisplayName', [string]$entry.GPODisplayName)
+            $writer.WriteElementString('BackupTime', [string]$entry.BackupTime)
+            $writer.WriteEndElement()
+        }
+
+        $writer.WriteEndElement()
+        $writer.WriteEndDocument()
+    } finally {
+        $writer.Dispose()
+    }
+
+    return $manifestPath
+}
+
 try {
     Invoke-Safely -ScriptBlock {
         # Get all GPOs from source domain
@@ -193,6 +296,48 @@ try {
         if ($BackupStatus.Count -gt 0) {
             $BackupStatus | Export-Csv -Path $backupStatusFile -NoTypeInformation -Encoding UTF8
             Write-Log -Message "Exported GPO backup status report to $backupStatusFile" -Level INFO
+        }
+
+        $manifestPath = Join-Path $BackupPath 'manifest.xml'
+        $manifestAltPath = Join-Path $BackupPath 'Manifest.xml'
+        $manifestEntryCount = 0
+        $manifestUsable = $false
+
+        $existingManifestPath = ''
+        if (Test-Path -LiteralPath $manifestPath) {
+            $existingManifestPath = $manifestPath
+        } elseif (Test-Path -LiteralPath $manifestAltPath) {
+            $existingManifestPath = $manifestAltPath
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($existingManifestPath)) {
+            try {
+                [xml]$manifestXml = Get-Content -LiteralPath $existingManifestPath -ErrorAction Stop
+                $manifestNodes = @($manifestXml.SelectNodes("//*[local-name()='BackupInst']"))
+                $manifestEntryCount = $manifestNodes.Count
+                $manifestUsable = ($manifestEntryCount -gt 0)
+                if ($manifestUsable) {
+                    Write-Log -Message "GPO backup manifest detected at '$existingManifestPath' with $manifestEntryCount entries." -Level INFO
+                    Write-Host "GPO backup manifest ready: $manifestEntryCount entries." -ForegroundColor Green
+                } else {
+                    Write-Log -Message "GPO backup manifest detected at '$existingManifestPath' but contains no BackupInst entries. Rebuilding fallback manifest." -Level WARN
+                }
+            } catch {
+                Write-Log -Message "Failed parsing existing GPO backup manifest at '$existingManifestPath': $($_.Exception.Message). Rebuilding fallback manifest." -Level WARN
+                $manifestUsable = $false
+            }
+        }
+
+        if (-not $manifestUsable) {
+            $manifestEntries = @(Get-GpoManifestEntriesFromBackupFolders -Path $BackupPath)
+            if ($manifestEntries.Count -gt 0) {
+                $writtenManifest = Write-GpoBackupManifest -Path $BackupPath -Entries $manifestEntries
+                Write-Log -Message "Generated fallback GPO backup manifest at '$writtenManifest' with $($manifestEntries.Count) entries." -Level WARN
+                Write-Host "Generated fallback manifest.xml with $($manifestEntries.Count) GPO backup entries." -ForegroundColor Yellow
+            } else {
+                Write-Log -Message "Could not generate fallback GPO backup manifest because no valid backup descriptors were discovered under '$BackupPath'." -Level WARN
+                Write-Host "[!] WARNING: Unable to build manifest.xml from backup folders. Check GPO_Backups contents." -ForegroundColor Yellow
+            }
         }
 
         $failedBackups = @($BackupStatus | Where-Object { $_.BackupStatus -eq 'Failed' })

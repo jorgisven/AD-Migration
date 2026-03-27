@@ -108,6 +108,7 @@ Invoke-Safely -ScriptBlock {
         # Protected default domain groups should be treated as system groups and skipped by default.
         $protectedDefaultGroupSidPatterns = @(
             'S-1-5-.*-512$', # Domain Admins
+            'S-1-5-.*-517$', # Cert Publishers
             'S-1-5-.*-516$', # Domain Controllers
             'S-1-5-.*-518$', # Schema Admins
             'S-1-5-.*-519$', # Enterprise Admins
@@ -116,10 +117,16 @@ Invoke-Safely -ScriptBlock {
             'S-1-5-.*-522$', # Cloneable Domain Controllers
             'S-1-5-.*-525$', # Protected Users
             'S-1-5-.*-526$', # Key Admins
-            'S-1-5-.*-527$'  # Enterprise Key Admins
+            'S-1-5-.*-527$', # Enterprise Key Admins
+            'S-1-5-.*-553$', # RAS and IAS Servers
+            'S-1-5-.*-571$', # Allowed RODC Password Replication Group
+            'S-1-5-.*-572$', # Denied RODC Password Replication Group
+            'S-1-5-.*-1101$', # DnsAdmins
+            'S-1-5-.*-1102$'  # DnsUpdateProxy
         )
         $protectedDefaultGroupNames = @(
             'Domain Admins',
+            'Cert Publishers',
             'Domain Controllers',
             'Schema Admins',
             'Enterprise Admins',
@@ -128,7 +135,12 @@ Invoke-Safely -ScriptBlock {
             'Cloneable Domain Controllers',
             'Protected Users',
             'Key Admins',
-            'Enterprise Key Admins'
+            'Enterprise Key Admins',
+            'RAS and IAS Servers',
+            'Allowed RODC Password Replication Group',
+            'Denied RODC Password Replication Group',
+            'DnsAdmins',
+            'DnsUpdateProxy'
         )
 
         foreach ($item in $items) {

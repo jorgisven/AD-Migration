@@ -111,6 +111,7 @@ try {
         
         $ZoneList = @()
         $AllRecords = @()
+        $staleRecordsSkipped = 0
 
         foreach ($Zone in $Zones) {
             $ZoneName = $Zone.ZoneName
@@ -132,6 +133,7 @@ try {
                     if ($FilterStale -and $Rec.Timestamp) {
                         $recAge = (Get-Date) - $Rec.Timestamp
                         if ($recAge.TotalDays -gt $StaleDays) {
+                            $staleRecordsSkipped++
                             continue
                         }
                     }
@@ -173,8 +175,13 @@ try {
         $recFile = Join-Path $ExportPath "DNS_Records_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
         $AllRecords | Export-Csv -Path $recFile -NoTypeInformation -Encoding UTF8
 
-        Write-Log -Message "Exported $($ZoneList.Count) zones and $($AllRecords.Count) records to $ExportPath" -Level INFO
-        Write-Host "DNS export complete: $($ZoneList.Count) zones, $($AllRecords.Count) records."
+        if ($FilterStale) {
+            Write-Log -Message "Exported $($ZoneList.Count) zones and $($AllRecords.Count) records to $ExportPath (stale records skipped: $staleRecordsSkipped; threshold: $StaleDays days)." -Level INFO
+            Write-Host "DNS export complete: $($ZoneList.Count) zones, $($AllRecords.Count) records, $staleRecordsSkipped stale records skipped."
+        } else {
+            Write-Log -Message "Exported $($ZoneList.Count) zones and $($AllRecords.Count) records to $ExportPath" -Level INFO
+            Write-Host "DNS export complete: $($ZoneList.Count) zones, $($AllRecords.Count) records."
+        }
         
     } -Operation "Export DNS from $SourceDomain"
     

@@ -95,6 +95,7 @@ $script:targetOUs = @()
 $script:explicitKeepGroups = @{}
 $script:protectedDefaultGroupNames = @(
     'Domain Admins',
+    'Cert Publishers',
     'Domain Controllers',
     'Schema Admins',
     'Enterprise Admins',
@@ -103,7 +104,12 @@ $script:protectedDefaultGroupNames = @(
     'Cloneable Domain Controllers',
     'Protected Users',
     'Key Admins',
-    'Enterprise Key Admins'
+    'Enterprise Key Admins',
+    'RAS and IAS Servers',
+    'Allowed RODC Password Replication Group',
+    'Denied RODC Password Replication Group',
+    'DnsAdmins',
+    'DnsUpdateProxy'
 )
 
 $latestMembers = Get-ChildItem -Path $SourceSecurityPath -Filter "GroupMembers_*.csv" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1

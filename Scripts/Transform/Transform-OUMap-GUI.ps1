@@ -315,6 +315,20 @@ function Search-Tree ($tree, $text) {
     $tree.EndUpdate()
 }
 
+function Test-IsDomainControllersOuDn {
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$DistinguishedName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DistinguishedName)) {
+        return $false
+    }
+
+    # Hide the default Domain Controllers OU and any descendants from mapping targets.
+    return ($DistinguishedName -match '(?:^|,)OU=Domain Controllers(?:,|$)')
+}
+
 $btnUndo.Add_Click({ Undo-Action })
 
 # Populate Source Tree
@@ -353,6 +367,10 @@ if ($result -eq 'Yes') {
         Add-NodeToTree -tree $treeTarget -dn $TargetDomain -tagData $null | Out-Null
         
         foreach ($ou in $TargetOUs) {
+            if (Test-IsDomainControllersOuDn -DistinguishedName $ou.DistinguishedName) {
+                continue
+            }
+
             # Create a tag for these so we know they are pre-existing, not from a source mapping
             $tag = @{
                 SourceDN    = "PRE-EXISTING"
@@ -378,6 +396,11 @@ if (Test-Path $draftFile) {
     $Draft = Import-Csv $draftFile
     foreach ($row in $Draft) {
         if ($row.Action -ne 'Skip' -and -not [string]::IsNullOrWhiteSpace($row.TargetDN)) {
+            if (Test-IsDomainControllersOuDn -DistinguishedName $row.TargetDN) {
+                Write-Host "Skipping draft mapping under Domain Controllers OU: $($row.TargetDN)" -ForegroundColor Yellow
+                continue
+            }
+
             $tag = @{
                 SourceDN    = $row.SourceDN
                 Description = $row.Description

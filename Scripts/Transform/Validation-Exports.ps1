@@ -72,22 +72,31 @@ if (-not (Test-Path $gpoBackupPath)) {
     $manifestPath = Join-Path $gpoBackupPath 'manifest.xml'
     $manifestPathAlt = Join-Path $gpoBackupPath 'Manifest.xml'
     $backupXmlFiles = @(Get-ChildItem -Path $gpoBackupPath -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "^(?:bkupInfo|backup)\.xml$" })
+    $bkupInfoFiles = @($backupXmlFiles | Where-Object { $_.Name -ieq 'bkupInfo.xml' })
+    $backupXmlDescriptorFiles = @($backupXmlFiles | Where-Object { $_.Name -ieq 'backup.xml' })
+    $hasManifest = (Test-Path $manifestPath) -or (Test-Path $manifestPathAlt)
 
-    if ((Test-Path $manifestPath) -or (Test-Path $manifestPathAlt)) {
+    if ($hasManifest) {
         Write-Host "[+] FOUND: GPO Backup manifest" -ForegroundColor Green
         Write-Log -Message "Validation PASSED: Found GPO backup manifest file." -Level INFO
+    } elseif ($backupXmlFiles.Count -gt 0) {
+        Write-Host "[+] INFO: GPO backup manifest.xml is missing, but descriptor fallback is available." -ForegroundColor Cyan
+        Write-Log -Message "Validation INFO: GPO backup manifest.xml missing; descriptor fallback is available (bkupInfo.xml=$($bkupInfoFiles.Count), backup.xml=$($backupXmlDescriptorFiles.Count))." -Level INFO
     } else {
-        Write-Host "[!] WARNING: GPO backup manifest.xml is missing. Import can still proceed using bkupInfo.xml fallback." -ForegroundColor Yellow
-        Write-Log -Message "Validation WARNING: GPO backup manifest.xml missing; import will rely on bkupInfo.xml discovery fallback." -Level WARN
+        Write-Host "[!] WARNING: GPO backup manifest.xml is missing and no descriptor fallback files were found." -ForegroundColor Yellow
+        Write-Log -Message "Validation WARNING: GPO backup manifest.xml missing and no descriptor fallback files were found yet." -Level WARN
     }
 
     if ($backupXmlFiles.Count -gt 0) {
-        Write-Host "[+] FOUND: GPO backup descriptor files ($($backupXmlFiles.Count) bkupInfo.xml)" -ForegroundColor Green
-        Write-Log -Message "Validation PASSED: Found $($backupXmlFiles.Count) GPO backup descriptor file(s)." -Level INFO
-    } else {
+        Write-Host "[+] FOUND: GPO backup descriptor files ($($backupXmlFiles.Count) total: $($bkupInfoFiles.Count) bkupInfo.xml, $($backupXmlDescriptorFiles.Count) backup.xml)" -ForegroundColor Green
+        Write-Log -Message "Validation PASSED: Found $($backupXmlFiles.Count) GPO backup descriptor file(s) (bkupInfo.xml=$($bkupInfoFiles.Count), backup.xml=$($backupXmlDescriptorFiles.Count))." -Level INFO
+    } elseif (-not $hasManifest) {
         Write-Host "[-] MISSING: No GPO backup descriptor files (bkupInfo.xml) were found under $gpoBackupPath" -ForegroundColor Red
-        Write-Log -Message "Validation FAILED: No bkupInfo.xml files found in GPO_Backups. GPO import cannot proceed." -Level ERROR
+        Write-Log -Message "Validation FAILED: No GPO backup manifest or descriptor XML files were found in GPO_Backups. GPO import cannot proceed." -Level ERROR
         $hasErrors = $true
+    } else {
+        Write-Host "[+] FOUND: GPO backup folders will be validated via manifest.xml" -ForegroundColor Green
+        Write-Log -Message "Validation PASSED: Manifest.xml is present, so per-backup descriptor XML files are optional." -Level INFO
     }
 }
 
