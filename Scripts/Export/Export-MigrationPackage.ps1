@@ -56,7 +56,37 @@ try {
     $StageScripts = Join-Path $TempDir "Scripts"
     $SourceScripts = Join-Path $RepoRoot "Scripts"
     Write-Log -Message "Copying Scripts from $SourceScripts..." -Level INFO
-    Copy-Item -Path $SourceScripts -Destination $StageScripts -Recurse -Container
+    if (-not (Test-Path $StageScripts)) {
+        New-Item -ItemType Directory -Path $StageScripts -Force | Out-Null
+    }
+    Copy-Item -Path (Join-Path $SourceScripts '*') -Destination $StageScripts -Recurse -Container
+
+    # 4b. Write package metadata for verification on target host.
+    $gpoImportScript = Join-Path $SourceScripts 'Import\Import-GPOs.ps1'
+    $gpoImportVersion = ''
+    $gpoImportHash = ''
+    if (Test-Path $gpoImportScript) {
+        $versionLine = Select-String -Path $gpoImportScript -Pattern "Import-GPOs script version" -SimpleMatch | Select-Object -First 1
+        if ($versionLine) {
+            $gpoImportVersion = [string]$versionLine.Line
+        }
+        try {
+            $gpoImportHash = (Get-FileHash -LiteralPath $gpoImportScript -Algorithm SHA256 -ErrorAction Stop).Hash
+        } catch {
+            $gpoImportHash = ''
+        }
+    }
+
+    $metadata = [ordered]@{
+        PackageCreatedAt = (Get-Date).ToString('o')
+        RepoRoot = $RepoRoot
+        SourceScriptsPath = $SourceScripts
+        ImportGPOsPath = $gpoImportScript
+        ImportGPOsVersionLine = $gpoImportVersion
+        ImportGPOsSHA256 = $gpoImportHash
+    }
+    $metadataPath = Join-Path $TempDir 'PACKAGE_METADATA.json'
+    $metadata | ConvertTo-Json -Depth 4 | Set-Content -Path $metadataPath -Encoding UTF8
 
     # 5. Copy Documentation
     $DocsDir = Join-Path $RepoRoot "Docs"

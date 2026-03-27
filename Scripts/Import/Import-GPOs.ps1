@@ -132,7 +132,14 @@ if ($effectiveDefaultPolicyMode -eq 'Rename' -and [string]::IsNullOrWhiteSpace($
 
 Write-Log -Message "Default domain policy handling mode: $effectiveDefaultPolicyMode" -Level INFO
 Write-Log -Message "Default domain policy options: Mode='$effectiveDefaultPolicyMode', Suffix='$DefaultPolicyNameSuffix'" -Level INFO
-Write-Log -Message "Import-GPOs script version: 2026-03-27.8" -Level INFO
+Write-Log -Message "Import-GPOs script version: 2026-03-27.9" -Level INFO
+Write-Log -Message "Import-GPOs script path: $($MyInvocation.MyCommand.Path)" -Level INFO
+try {
+    $scriptHash = (Get-FileHash -LiteralPath $MyInvocation.MyCommand.Path -Algorithm SHA256 -ErrorAction Stop).Hash
+    Write-Log -Message "Import-GPOs script SHA256: $scriptHash" -Level INFO
+} catch {
+    Write-Log -Message "Could not calculate script hash for Import-GPOs: $($_.Exception.Message)" -Level WARN
+}
 
 # Diagnostics: Check GroupPolicy module availability
 $gpModule = Get-Module -Name GroupPolicy -ListAvailable -ErrorAction SilentlyContinue
@@ -233,7 +240,7 @@ function Get-GpoDisplayNameFromXmlFile {
     }
 
     if ($document) {
-        $displayName = Get-FirstXmlInnerText -Document $document -LocalNames @('GPODisplayName', 'Name')
+        $displayName = Get-FirstXmlInnerText -Document $document -LocalNames @('GPODisplayName', 'DisplayName', 'GPOName', 'Name')
         if (-not [string]::IsNullOrWhiteSpace($displayName)) {
             return $displayName
         }
@@ -241,6 +248,8 @@ function Get-GpoDisplayNameFromXmlFile {
 
     $patterns = @(
         '<GPODisplayName>\s*(?<Value>[^<]+?)\s*</GPODisplayName>',
+        '<DisplayName>\s*(?<Value>[^<]+?)\s*</DisplayName>',
+        '<GPOName>\s*(?<Value>[^<]+?)\s*</GPOName>',
         '<Name>\s*(?<Value>[^<]+?)\s*</Name>'
     )
 
@@ -275,7 +284,7 @@ function Get-GpoGuidCandidatesFromXmlFile {
 
     if ($document) {
         # Restrict extraction to backup instance identity fields only.
-        $backupIdNodes = @($document.SelectNodes("//*[local-name()='BackupId']"))
+        $backupIdNodes = @($document.SelectNodes("//*[local-name()='BackupId' or local-name()='BackupID']"))
         foreach ($node in $backupIdNodes) {
             $normalized = ConvertTo-GpoBackupGuid -Value ([string]$node.InnerText)
             if (Test-GpoBackupGuid -Value $normalized) {
@@ -283,8 +292,16 @@ function Get-GpoGuidCandidatesFromXmlFile {
             }
         }
 
-        $backupInstIdNodes = @($document.SelectNodes("//*[local-name()='BackupInst']/*[local-name()='ID']"))
+        $backupInstIdNodes = @($document.SelectNodes("//*[local-name()='BackupInst']//*[local-name()='ID']"))
         foreach ($node in $backupInstIdNodes) {
+            $normalized = ConvertTo-GpoBackupGuid -Value ([string]$node.InnerText)
+            if (Test-GpoBackupGuid -Value $normalized) {
+                $results += $normalized
+            }
+        }
+
+        $guidNodes = @($document.SelectNodes("//*[local-name()='GPOGuid' or local-name()='GpoGuid' or local-name()='Guid' or local-name()='GPOID']"))
+        foreach ($node in $guidNodes) {
             $normalized = ConvertTo-GpoBackupGuid -Value ([string]$node.InnerText)
             if (Test-GpoBackupGuid -Value $normalized) {
                 $results += $normalized
@@ -295,7 +312,9 @@ function Get-GpoGuidCandidatesFromXmlFile {
     if ($results.Count -eq 0) {
         $tagPatterns = @(
             '<BackupId>\s*(?<Value>\{?[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\}?)\s*</BackupId>',
-            '<BackupInst[^>]*>[\s\S]*?<ID>\s*(?<Value>\{?[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\}?)\s*</ID>'
+            '<BackupID>\s*(?<Value>\{?[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\}?)\s*</BackupID>',
+            '<BackupInst[^>]*>[\s\S]*?<ID>\s*(?<Value>\{?[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\}?)\s*</ID>',
+            '<(?:GPOGuid|GpoGuid|Guid|GPOID)>\s*(?<Value>\{?[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\}?)\s*</(?:GPOGuid|GpoGuid|Guid|GPOID)>'
         )
 
         foreach ($pattern in $tagPatterns) {
@@ -320,8 +339,8 @@ function Get-GpoBackupDescriptorInfo {
 
     [xml]$descriptorXml = Get-Content -LiteralPath $BackupXml.FullName -ErrorAction Stop
 
-    $gpoName = Get-FirstXmlInnerText -Document $descriptorXml -LocalNames @('GPODisplayName', 'Name')
-    $backupId = Get-FirstXmlInnerText -Document $descriptorXml -LocalNames @('BackupId', 'ID')
+    $gpoName = Get-FirstXmlInnerText -Document $descriptorXml -LocalNames @('GPODisplayName', 'DisplayName', 'GPOName', 'Name')
+    $backupId = Get-FirstXmlInnerText -Document $descriptorXml -LocalNames @('BackupId', 'BackupID', 'ID', 'GPOGuid', 'GpoGuid', 'Guid', 'GPOID')
 
     $gpoName = $gpoName.Trim()
     $backupId = $backupId.Trim()
@@ -368,8 +387,8 @@ function Get-GpoBackupsFromManifest {
             $manifestBackups = @()
 
             foreach ($node in $backupNodes) {
-                $idNode = $node.SelectSingleNode("./*[local-name()='ID' or local-name()='BackupId']")
-                $nameNode = $node.SelectSingleNode("./*[local-name()='GPODisplayName' or local-name()='Name']")
+                $idNode = $node.SelectSingleNode(".//*[local-name()='ID' or local-name()='BackupId' or local-name()='BackupID' or local-name()='GPOGuid' or local-name()='GpoGuid' or local-name()='Guid' or local-name()='GPOID']")
+                $nameNode = $node.SelectSingleNode(".//*[local-name()='GPODisplayName' or local-name()='DisplayName' or local-name()='GPOName' or local-name()='Name']")
 
                 $backupId = if ($idNode) { [string]$idNode.InnerText } else { '' }
                 $gpoName = if ($nameNode) { [string]$nameNode.InnerText } else { '' }
@@ -426,54 +445,72 @@ function Get-GpoBackupsFromFolders {
         }
 
         $folder = $entry.Value
-        $xmlFiles = @(
-            'Backup.xml',
-            'backup.xml',
-            'bkupInfo.xml',
-            'gpreport.xml'
-        ) | ForEach-Object {
-            $candidatePath = Join-Path $folder.FullName $_
-            if (Test-Path -LiteralPath $candidatePath) {
-                Get-Item -LiteralPath $candidatePath -ErrorAction SilentlyContinue
-            }
-        } | Where-Object { $_ }
+        $descriptorCandidates = @(
+            (Join-Path $folder.FullName 'Backup.xml'),
+            (Join-Path $folder.FullName 'backup.xml'),
+            (Join-Path $folder.FullName 'bkupInfo.xml')
+        ) | Where-Object { Test-Path -LiteralPath $_ }
 
-        $gpoName = ''
+        if ($descriptorCandidates.Count -eq 0) {
+            Write-Log -Message "Skipping backup folder '$($folder.FullName)': No descriptor XML found (Backup.xml/backup.xml/bkupInfo.xml)." -Level WARN
+            continue
+        }
 
-        foreach ($xmlFile in $xmlFiles) {
+        $bestResult = $null
+        foreach ($descriptorPath in $descriptorCandidates) {
             try {
-                $gpoName = Get-GpoDisplayNameFromXmlFile -XmlFile $xmlFile
-                if (-not [string]::IsNullOrWhiteSpace($gpoName)) {
-                    break
+                [xml]$descriptor = Get-Content -LiteralPath $descriptorPath -ErrorAction Stop
+
+                $gpoNameNode = $descriptor.SelectSingleNode("//*[local-name()='GPODisplayName' or local-name()='DisplayName' or local-name()='GPOName' or local-name()='Name']")
+                $backupIdNode = $descriptor.SelectSingleNode("//*[local-name()='BackupId' or local-name()='BackupID' or local-name()='ID']")
+                $gpoGuidNode = $descriptor.SelectSingleNode("//*[local-name()='GPOGuid' or local-name()='GpoGuid' or local-name()='Guid' or local-name()='GPOID']")
+
+                $gpoName = if ($gpoNameNode) { ([string]$gpoNameNode.InnerText).Trim() } else { '' }
+                $backupId = if ($backupIdNode) { ([string]$backupIdNode.InnerText).Trim() } else { '' }
+                $gpoGuid = if ($gpoGuidNode) { ([string]$gpoGuidNode.InnerText).Trim() } else { '' }
+
+                $guidCandidates = @((ConvertTo-GpoBackupGuid -Value $folder.Name))
+                foreach ($candidate in @($backupId, $gpoGuid)) {
+                    $normalized = ConvertTo-GpoBackupGuid -Value $candidate
+                    if (Test-GpoBackupGuid -Value $normalized) {
+                        $guidCandidates += $normalized
+                    }
+                }
+                $guidCandidates = @($guidCandidates | Where-Object { Test-GpoBackupGuid -Value $_ } | Select-Object -Unique)
+
+                $hasName = -not [string]::IsNullOrWhiteSpace($gpoName)
+                $hasIdentifier = $guidCandidates.Count -gt 0
+                $score = 0
+                if ($hasName) { $score += 2 }
+                if ($hasIdentifier) { $score += 1 }
+
+                if (($bestResult -eq $null) -or ($score -gt $bestResult.Score)) {
+                    $bestResult = [pscustomobject]@{
+                        DescriptorPath = $descriptorPath
+                        GpoName = $gpoName
+                        GuidCandidates = $guidCandidates
+                        HasName = $hasName
+                        HasIdentifier = $hasIdentifier
+                        Score = $score
+                    }
                 }
             } catch {
-                Write-Log -Message "Failed parsing backup metadata XML '$($xmlFile.FullName)' while resolving backup folder '$($folder.Name)': $($_.Exception.Message)" -Level WARN
+                Write-Log -Message "Failed parsing backup descriptor '$descriptorPath' while resolving backup folder '$($folder.Name)': $($_.Exception.Message)" -Level WARN
             }
         }
 
-        if (-not [string]::IsNullOrWhiteSpace($gpoName)) {
-            $guidCandidates = @((ConvertTo-GpoBackupGuid -Value $folder.Name))
-
-            $metadataIdFiles = @($xmlFiles | Where-Object { $_.Name -imatch '^(backup|bkupinfo)\.xml$' })
-            foreach ($xmlFile in $metadataIdFiles) {
-                try {
-                    $guidCandidates += Get-GpoGuidCandidatesFromXmlFile -XmlFile $xmlFile
-                } catch {
-                    Write-Log -Message "Failed extracting GUID candidates from '$($xmlFile.FullName)' while resolving backup folder '$($folder.Name)': $($_.Exception.Message)" -Level WARN
-                }
-            }
-
-            $guidCandidates = @($guidCandidates | Where-Object { Test-GpoBackupGuid -Value $_ } | Select-Object -Unique)
-
+        if ($bestResult -and $bestResult.HasName) {
             $discovered += [PSCustomObject]@{
-                ID             = $folder.Name
-                GPODisplayName = $gpoName
-                BackupPath     = $folder.FullName
-                CandidateBackupIds = $guidCandidates
-                CandidateBackupNames = @($gpoName)
+                ID                 = $folder.Name
+                GPODisplayName     = $bestResult.GpoName
+                BackupPath         = $folder.FullName
+                CandidateBackupIds = @($bestResult.GuidCandidates)
+                CandidateBackupNames = @($bestResult.GpoName)
             }
+        } elseif ($bestResult -and $bestResult.HasIdentifier) {
+            Write-Log -Message "Skipping backup folder '$($folder.FullName)': Descriptor contained identifiers but no display name." -Level WARN
         } else {
-            Write-Log -Message "Skipping backup folder '$($folder.FullName)': Could not determine a GPO display name from its XML content." -Level WARN
+            Write-Log -Message "Skipping backup folder '$($folder.FullName)': Could not determine a GPO display name from descriptor XML." -Level WARN
         }
     }
 
@@ -538,11 +575,11 @@ function Test-GpoBackupFolderIntegrity {
 
     try {
         [xml]$descriptorXml = Get-Content -LiteralPath $descriptorPath -ErrorAction Stop
-        $xmlName = Get-FirstXmlInnerText -Document $descriptorXml -LocalNames @('GPODisplayName', 'Name')
-        $xmlBackupId = Get-FirstXmlInnerText -Document $descriptorXml -LocalNames @('BackupId', 'ID')
+        $xmlName = Get-FirstXmlInnerText -Document $descriptorXml -LocalNames @('GPODisplayName', 'DisplayName', 'GPOName', 'Name')
+        $xmlBackupId = Get-FirstXmlInnerText -Document $descriptorXml -LocalNames @('BackupId', 'BackupID', 'ID')
 
         if ([string]::IsNullOrWhiteSpace($xmlName) -and [string]::IsNullOrWhiteSpace($ExpectedDisplayName)) {
-            $result.Reason = "Descriptor XML parsed but does not contain GPODisplayName/Name."
+            $result.Reason = "Descriptor XML parsed but does not contain a recognized display-name field (GPODisplayName/DisplayName/GPOName/Name)."
             return [PSCustomObject]$result
         }
 
@@ -942,7 +979,7 @@ if ($script:GpoImportStats.InvalidBackupDataDetected -gt 0) {
 if ($script:GpoImportStats.ExistingGpoNames.Count -gt 0) {
     Write-Host "`n[*] GPOs ALREADY EXISTED (Skipped in this run):" -ForegroundColor Cyan
     $script:GpoImportStats.ExistingGpoNames | Sort-Object | ForEach-Object {
-        Write-Host "    ✓ $_" -ForegroundColor Green
+        Write-Host "    [OK] $_" -ForegroundColor Green
     }
     if ($Force) {
         Write-Host "[*] To overwrite these entries in a future run, include -Force." -ForegroundColor Yellow
@@ -950,16 +987,16 @@ if ($script:GpoImportStats.ExistingGpoNames.Count -gt 0) {
 }
 
 if ($script:GpoImportStats.NewlyImportedGpoNames.Count -gt 0) {
-    Write-Host "`n[+] GPOs NEWLY IMPORTED (Added in this run):" -ForegroundColor Green
+    Write-Host "`n[+] GPOs NEWLY IMPORTED - Created in this run:" -ForegroundColor Green
     $script:GpoImportStats.NewlyImportedGpoNames | Sort-Object | ForEach-Object {
-        Write-Host "    ✓ $_" -ForegroundColor Green
+        Write-Host "    [OK] $_" -ForegroundColor Green
     }
 }
 
 if ($script:GpoImportStats.FailedGpoNames.Count -gt 0) {
     Write-Host "`n[-] GPOs FAILED TO IMPORT (Retry in next run):" -ForegroundColor Red
     $script:GpoImportStats.FailedGpoNames | Sort-Object | ForEach-Object {
-        Write-Host "    ✗ $_" -ForegroundColor Red
+        Write-Host "    [X] $_" -ForegroundColor Red
     }
 }
 
